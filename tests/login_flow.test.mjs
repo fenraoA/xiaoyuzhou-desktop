@@ -224,3 +224,37 @@ test("history page is routed and renders progress", () => {
   const html = readFileSync(path.join(projectRoot, "app.html"), "utf8");
   assert.ok(html.includes('data-route="history"'), "导航缺少「最近听过」入口");
 });
+
+test("played history marks episodes when they start playing", () => {
+  const bg = readFileSync(path.join(projectRoot, "background.js"), "utf8");
+  assert.ok(bg.includes('"/played_create": "/v1/episode-played/create"'), "后台未注册播放记录接口");
+  assert.ok(appSource.includes("markEpisodePlayed"), "缺少 markEpisodePlayed");
+  // 必须在 openEpisode 里调用，否则播放不产生记录
+  const i = appSource.indexOf("async function openEpisode");
+  const j = appSource.indexOf("async function toggleSubscription", i);
+  assert.ok(appSource.slice(i, j).includes("markEpisodePlayed"), "openEpisode 未调用 markEpisodePlayed");
+});
+
+test("same episode click opens detail instead of replaying", () => {
+  const i = appSource.indexOf("async function openEpisode");
+  const j = appSource.indexOf("async function toggleSubscription", i);
+  const body = appSource.slice(i, j);
+  assert.ok(body.includes("episodeIdOf(state.current) === episodeIdOf(episode)"), "缺少同一集判断");
+  assert.ok(body.includes("state.episodeView"), "同一集应打开详情页");
+});
+
+test("player title and cover navigate to the podcast", () => {
+  const i = appSource.indexOf("async function openEpisode");
+  const j = appSource.indexOf("async function toggleSubscription", i);
+  const body = appSource.slice(i, j);
+  assert.ok(body.includes('$("#player-title").onclick'), "标题未绑定跳转");
+  assert.ok(body.includes('$("#player-cover").onclick'), "封面未绑定跳转");
+  assert.ok(body.includes("openPodcast(state.current)"), "应跳转到节目详情");
+});
+
+test("favorite action is available in cards and player menu", () => {
+  assert.ok(appSource.includes("function toggleFavorite"), "缺少 toggleFavorite");
+  assert.ok(appSource.includes('"/favorite_update"'), "未调用收藏接口");
+  const html = readFileSync(path.join(projectRoot, "app.html"), "utf8");
+  assert.ok(html.includes('id="favorite-button"'), "播放器菜单缺少收藏按钮");
+});

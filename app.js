@@ -27,6 +27,7 @@ const state = {
   progressTimer: null,
   subscriptions: [],
   history: [],
+  lastPlayedMark: new Map(),
   current: null,
   episodeDetails: new Map(),
   auth: null,
@@ -588,6 +589,7 @@ function podcastCard(item, index) {
     canResolveEpisode ? `<button data-card-action="download" role="menuitem">下载音频</button>` : "",
     canResolveEpisode ? `<button data-card-action="transcribe" role="menuitem">${transcriptActionLabel()}</button>` : "",
     episodeIdOf(item) ? `<button data-card-action="copy-episode" role="menuitem">复制单集链接</button>` : "",
+    episodeIdOf(item) ? `<button data-card-action="favorite" role="menuitem">${favoriteActionLabel(item)}</button>` : "",
     canViewPodcast ? `<button data-card-action="copy-podcast" role="menuitem">复制节目链接</button>` : ""
   ].join("");
   return `<article class="podcast-card" data-index="${index}">
@@ -597,6 +599,33 @@ function podcastCard(item, index) {
       <div class="card-actions"><button class="mini-button" data-card-action="play">播放</button>${viewPodcast}${summary}${moreActions(secondaryActions, "action-menu-card")}</div>
     </div>
   </article>`;
+}
+
+async function toggleFavorite(item) {
+  const eid = episodeIdOf(item);
+  if (!eid) return notify("无法识别这个单集");
+  if (!state.auth?.accessToken) return notify("请先登录再收藏");
+  const favorited = !(state.favorites?.has(eid));
+  try {
+    await api("/favorite_update", {
+      eid,
+      favorited,
+      sourcePageName: 8,
+      currentPageName: 9
+    });
+    if (!state.favorites) state.favorites = new Set();
+    if (favorited) state.favorites.add(eid); else state.favorites.delete(eid);
+    notify(favorited ? "已收藏" : "已取消收藏");
+    // 刷新当前页面以更新按钮状态
+    renderRoute();
+  } catch (error) {
+    notify("收藏失败：" + error.message);
+  }
+}
+
+function favoriteActionLabel(item) {
+  const eid = episodeIdOf(item);
+  return state.favorites?.has(eid) ? "取消收藏" : "收藏单集";
 }
 
 function bindCardActions(holder, items) {
@@ -616,6 +645,7 @@ function bindCardActions(holder, items) {
       if (action === "transcribe") exportEpisodeTranscript(item, control);
       if (action === "copy-episode") copyEpisodeLink(item);
       if (action === "copy-podcast") copyPodcastLink(item);
+      if (action === "favorite") toggleFavorite(item);
     });
   });
 }
@@ -930,6 +960,23 @@ function timestampDeepLink(item, seconds) {
 const PROGRESS_REPORT_INTERVAL_MS = 12_000;
 // 播放不足 5 秒不写入，避免误点产生一堆垃圾记录
 const MIN_PLAY_PROGRESS_SECONDS = 5;
+
+// 标记为听过：调用 /v1/episode-played/create，这会把单集加入「最近听过」
+// 进度上报（playback-progress/update）只写进度，不产生收听历史记录
+async function markEpisodePlayed(item) {
+  const eid = episodeIdOf(item);
+  if (!eid || !state.auth?.accessToken) return;
+  const pid = podcastIdOf(item);
+  // 同一集短时间内不重复上报
+  const now = Date.now();
+  const last = state.lastPlayedMark?.get(eid) || 0;
+  if (now - last < 30_000) return;
+  if (!state.lastPlayedMark) state.lastPlayedMark = new Map();
+  state.lastPlayedMark.set(eid, now);
+  api("/played_create", { eid, pid }).catch(() => {
+    // 上报失败不影响播放
+  });
+}
 
 function progressListOf(response) {
   const data = response?.data ?? response;
@@ -2006,6 +2053,14 @@ async function openEpisode(item) {
   try {
     const episode = await resolveEpisode(item);
     if (!episode) return;
+    // 同一集已经在播放：打开详情页，不要重新播放
+    if (episodeIdOf(episode) && episodeIdOf(state.current) === episodeIdOf(episode)) {
+      if (!state.episodeView) {
+        state.episodeView = { episode, scrollY: window.scrollY };
+        renderRoute();
+      }
+      return;
+    }
     const audio = audioOf(episode);
     if (!audio) return notify("这集暂时没有可播放的音频地址");
     state.current = episode;
@@ -2037,9 +2092,19 @@ async function openEpisode(item) {
       }
     }).catch(() => {});
     $("#player-title").textContent = titleOf(episode);
+    $("#player-title").onclick = () => {
+      if (state.current) openPodcast(state.current);
+    };
+    $("#player-title").title = "点击查看节目";
+    $("#player-title").style.cursor = "pointer";
     $("#player-subtitle").textContent = episode?.podcast?.title || episode?.podcast?.name || "小宇宙单集";
     const image = imageOf(episode);
     $("#player-cover").innerHTML = image ? `<img src="${esc(image)}" alt="" />` : "<span>◌</span>";
+    $("#player-cover").onclick = () => {
+      if (state.current) openPodcast(state.current);
+    };
+    $("#player-cover").title = "点击查看节目";
+    $("#player-cover").style.cursor = "pointer";
     state.episodeView = {
       episode,
       scrollY: window.scrollY
@@ -2051,6 +2116,7 @@ async function openEpisode(item) {
     renderRoute();
     window.scrollTo({ top: 0, behavior: "smooth" });
     try { await player.play(); } catch { notify("浏览器阻止了自动播放，请点击播放按钮"); }
+    markEpisodePlayed(episode);
   } catch (error) {
     notify(error.message);
   }
@@ -2300,6 +2366,10 @@ function initPlayer() {
   $("#play-button").addEventListener("click", () => { if (!audio.src) return notify("先选择一集播客"); if (audio.paused) audio.play(); else audio.pause(); });
   $("#skip-back").addEventListener("click", () => { audio.currentTime = Math.max(0, audio.currentTime - 15); });
   $("#skip-forward").addEventListener("click", () => { audio.currentTime = Math.min(audio.duration || Infinity, audio.currentTime + 30); });
+  $("#favorite-button").addEventListener("click", () => {
+    if (state.current) toggleFavorite(state.current);
+    $("#player-more-menu").removeAttribute("open");
+  });
   $("#speed-button").addEventListener("click", (event) => {
     const next = audio.playbackRate >= 2 ? 1 : audio.playbackRate + .5;
     audio.playbackRate = next;
