@@ -3,6 +3,9 @@ const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
 const SIDEBAR_COLLAPSED_KEY = "xyzSidebarCollapsed";
 // 登录二维码绘制的基准边长；必须固定，不能拿 canvas.width 当基准（会被绘制结果覆写）
 const LOGIN_QRCODE_BASE_SIZE = 200;
+// 音量设置持久化在 localStorage，跨会话保留
+const VOLUME_KEY = "xyzPlayerVolume";
+const VOLUME_MUTED_KEY = "xyzPlayerMuted";
 const SUMMARY_PROVIDERS = [
   { id: "qwen", label: "Qwen", keyField: "summaryQwenApiKey" },
   { id: "doubao", label: "豆包", keyField: "summaryDoubaoApiKey" },
@@ -2022,6 +2025,103 @@ function initPlayer() {
     updateActiveProgressAnchor(audio.currentTime);
   });
   $("#progress").addEventListener("input", (event) => { if (audio.duration) audio.currentTime = (event.target.value / 100) * audio.duration; });
+  initVolumeControl(audio);
+}
+
+function volumeIconFor(level, muted) {
+  if (muted || level <= 0) return "🔇";
+  if (level < 34) return "🔈";
+  if (level < 67) return "🔉";
+  return "🔊";
+}
+
+function applyVolume(audio, level, { muted = false, persist = true } = {}) {
+  const clamped = Math.max(0, Math.min(100, Math.round(level)));
+  const effective = muted ? 0 : clamped / 100;
+  audio.volume = effective;
+  audio.muted = muted || clamped === 0;
+
+  const slider = $("#volume-slider");
+  const label = $("#volume-value");
+  const icon = $("#volume-icon");
+  const button = $("#volume-button");
+  if (slider) slider.value = String(clamped);
+  if (label) label.textContent = muted ? "静音" : String(clamped);
+  if (icon) icon.textContent = volumeIconFor(clamped, muted || clamped === 0);
+  if (button) {
+    button.classList.toggle("is-muted", muted || clamped === 0);
+    button.title = muted ? "已静音，点击恢复" : `音量 ${clamped}`;
+  }
+
+  if (persist) {
+    try {
+      localStorage.setItem(VOLUME_KEY, String(clamped));
+      localStorage.setItem(VOLUME_MUTED_KEY, muted ? "true" : "false");
+    } catch {
+      // 存储不可用时忽略，音量仍然作用于当前会话
+    }
+  }
+  return clamped;
+}
+
+function initVolumeControl(audio) {
+  const control = $("#volume-control");
+  const button = $("#volume-button");
+  const slider = $("#volume-slider");
+  if (!control || !button || !slider) return;
+
+  // 恢复上次的音量；没有记录时用 100
+  const saved = Number.parseInt(localStorage.getItem(VOLUME_KEY) ?? "100", 10);
+  const savedMuted = localStorage.getItem(VOLUME_MUTED_KEY) === "true";
+  applyVolume(audio, Number.isFinite(saved) ? saved : 100, { muted: savedMuted, persist: false });
+
+  const setExpanded = (expanded) => {
+    control.dataset.volumeExpanded = expanded ? "true" : "false";
+    button.setAttribute("aria-expanded", String(expanded));
+  };
+
+  // 点击图标：展开滑块；已展开时点击切换静音
+  button.addEventListener("click", (event) => {
+    event.stopPropagation();
+    const expanded = control.dataset.volumeExpanded === "true";
+    if (!expanded) {
+      setExpanded(true);
+      slider.focus();
+      return;
+    }
+    const level = Number.parseInt(slider.value, 10) || 0;
+    const nextMuted = !(audio.muted || level === 0);
+    applyVolume(audio, level === 0 ? 50 : level, { muted: nextMuted });
+  });
+
+  slider.addEventListener("input", (event) => {
+    applyVolume(audio, Number(event.target.value), { muted: false });
+  });
+
+  // 双击图标快速静音/恢复
+  button.addEventListener("dblclick", (event) => {
+    event.stopPropagation();
+    const level = Number.parseInt(slider.value, 10) || 0;
+    const nextMuted = !(audio.muted || level === 0);
+    applyVolume(audio, level === 0 ? 50 : level, { muted: nextMuted });
+  });
+
+  // 点击别处收起滑块
+  document.addEventListener("click", (event) => {
+    if (!control.contains(event.target)) setExpanded(false);
+  });
+  control.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") setExpanded(false);
+  });
+
+  // 滚轮在图标上快速调整
+  control.addEventListener("wheel", (event) => {
+    if (control.dataset.volumeExpanded !== "true") return;
+    event.preventDefault();
+    const level = Number.parseInt(slider.value, 10) || 0;
+    const next = level + (event.deltaY < 0 ? 5 : -5);
+    applyVolume(audio, next, { muted: false });
+  }, { passive: false });
 }
 
 async function syncPermissionBanner() {

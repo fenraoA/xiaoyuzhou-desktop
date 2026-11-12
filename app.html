@@ -67,6 +67,15 @@
           <span id="duration">0:00</span>
         </div>
         <div class="player-extra">
+          <div id="volume-control" class="volume-control" data-volume-expanded="false">
+            <button id="volume-button" class="volume-button" type="button" title="音量" aria-label="音量" aria-expanded="false">
+              <span id="volume-icon" aria-hidden="true">🔊</span>
+            </button>
+            <div class="volume-slider-wrap">
+              <input id="volume-slider" type="range" min="0" max="100" step="1" value="100" aria-label="音量调节" />
+              <span id="volume-value" class="volume-value">100</span>
+            </div>
+          </div>
           <button id="view-podcast-button" class="player-link-button" title="查看当前节目" disabled>查看节目</button>
           <button id="summarize-button" class="player-link-button is-accent" title="导出文字稿并总结当前单集" disabled>AI 总结</button>
           <details id="player-more-menu" class="action-menu action-menu-player">

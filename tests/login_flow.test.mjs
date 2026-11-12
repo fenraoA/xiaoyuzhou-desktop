@@ -103,3 +103,34 @@ test("qrcode library exposes a usable factory in a bare sandbox", () => {
   assert.ok(count > 0 && count <= 40, "应自动选择合法版本：" + count);
   assert.equal(typeof code.isDark(0, 0), "boolean");
 });
+
+test("volume control is wired and persists the level", () => {
+  const html = readFileSync(path.join(projectRoot, "app.html"), "utf8");
+  for (const id of ["volume-control", "volume-button", "volume-slider", "volume-value", "volume-icon"]) {
+    assert.ok(html.includes(`id="${id}"`), `app.html 缺少 #${id}`);
+  }
+  // 滑块必须覆盖完整音域，否则静音和最大音量表达不了
+  assert.match(html, /id="volume-slider"[^>]*min="0"[^>]*max="100"/);
+
+  assert.ok(appSource.includes("function initVolumeControl"), "缺少 initVolumeControl");
+  assert.ok(appSource.includes("function applyVolume"), "缺少 applyVolume");
+  assert.ok(appSource.includes('localStorage.setItem(VOLUME_KEY'), "音量未持久化");
+
+  // initPlayer 必须真的调用它，否则控件是死的
+  const start = appSource.indexOf("function initPlayer");
+  const end = appSource.indexOf("function volumeIconFor", start);
+  assert.ok(appSource.slice(start, end).includes("initVolumeControl(audio)"),
+    "initPlayer 未调用 initVolumeControl");
+
+  // 音量必须落到 audio.volume 上，不能只改 UI
+  assert.match(appSource, /audio\.volume\s*=/, "音量未写入 audio.volume");
+});
+
+test("volume icon reflects the level", () => {
+  const start = appSource.indexOf("function volumeIconFor");
+  const end = appSource.indexOf("function applyVolume", start);
+  const body = appSource.slice(start, end);
+  for (const icon of ["🔇", "🔈", "🔉", "🔊"]) {
+    assert.ok(body.includes(icon), `音量图标缺少 ${icon}`);
+  }
+});

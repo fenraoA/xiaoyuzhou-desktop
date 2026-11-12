@@ -326,3 +326,64 @@ button:disabled { cursor: not-allowed; }
 .code-status.is-error { color: #b4453a; }
 .code-status.is-pending { color: var(--ink-soft); }
 .code-status.is-success { color: #377551; }
+
+
+/* 音量控件：默认收起成一个图标，点击展开滑块，避免挤压播放器右侧按钮区 */
+.volume-control {
+  align-items: center;
+  display: flex;
+  gap: 6px;
+  position: relative;
+}
+.volume-button {
+  align-items: center;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  color: var(--ink);
+  cursor: pointer;
+  display: inline-flex;
+  font-size: 13px;
+  height: 26px;
+  justify-content: center;
+  line-height: 1;
+  padding: 0;
+  transition: background .15s, border-color .15s;
+  width: 26px;
+}
+.volume-button:hover,
+.volume-control[data-volume-expanded="true"] .volume-button {
+  background: var(--paper-deep);
+  border-color: var(--line);
+}
+.volume-button.is-muted { opacity: .65; }
+.volume-button:focus-visible {
+  border-color: var(--blue);
+  outline: none;
+}
+.volume-slider-wrap {
+  align-items: center;
+  display: flex;
+  gap: 6px;
+  max-width: 0;
+  opacity: 0;
+  overflow: hidden;
+  transition: max-width .18s ease, opacity .18s ease;
+}
+.volume-control[data-volume-expanded="true"] .volume-slider-wrap {
+  max-width: 120px;
+  opacity: 1;
+}
+.volume-slider-wrap input[type="range"] {
+  accent-color: var(--ink);
+  cursor: pointer;
+  margin: 0;
+  width: 78px;
+}
+.volume-value {
+  color: var(--ink-soft);
+  font: 10px "DM Mono", monospace;
+  font-variant-numeric: tabular-nums;
+  min-width: 22px;
+  text-align: right;
+}
