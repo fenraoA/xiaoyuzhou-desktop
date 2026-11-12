@@ -1,6 +1,6 @@
 # 小宇宙桌面版（非官方）
 
-一个面向 macOS 与 Windows 的个人小宇宙 Chrome 扩展，提供独立桌面窗口、节目发现与搜索、订阅管理、音频下载、ASR 转写和多模型 AI 总结。
+一个面向 macOS 与 Windows 的个人小宇宙 Firefox 扩展（由 Chrome MV3 版移植），提供独立桌面窗口、节目发现与搜索、订阅管理、音频下载、ASR 转写和多模型 AI 总结。
 
 > 本项目不是小宇宙官方产品。账户接口仅在已获授权的范围内使用；请遵守小宇宙及所选云服务的使用条款，并仅处理你有权访问的内容。
 
@@ -50,7 +50,7 @@ Demo 使用虚构数据，可体验发现、节目详情、播放器、文字稿
 ## 环境要求
 
 - macOS 或 Windows 10/11
-- Google Chrome 110 或更高版本
+- Mozilla Firefox 140 或更高版本（需支持 `data_collection_permissions`）
 - Python 3（macOS 可使用系统 `/usr/bin/python3`；Windows 需加入 PATH）
 - 可选：`ffmpeg`。本地 Qwen、豆包或 Fun-ASR 处理 M4A 等格式时需要
 - 可选：`uv`。安装本地 Qwen3-ASR 运行时需要
@@ -77,43 +77,42 @@ git clone https://github.com/QWE38qwe/xiaoyuzhou-desktop.git
 cd xiaoyuzhou-desktop
 ```
 
-### 2. 安装 Chrome 扩展
+### 2. 安装 Firefox 扩展
 
-Chrome Web Store 审核通过前，请使用开发者模式：
+正式上架 AMO 前，请使用临时载入：
 
-1. 打开 `chrome://extensions`
-2. 开启右上角“开发者模式”
-3. 点击“加载已解压的扩展程序”
-4. 选择本仓库根目录
-5. 记录扩展卡片显示的扩展 ID
+1. 打开 `about:debugging#/runtime/this-firefox`
+2. 点击“临时载入附加组件”
+3. 选择本仓库根目录下的 `manifest.json`
+4. 扩展 ID 由 `browser_specific_settings.gecko.id` 固定为 `xiaoyuzhou-desktop@qwe38qwe.github.io`，无需手工记录
+
+> 临时载入的扩展会在 Firefox 重启后移除；需要长期使用时，请用 `web-ext sign` 或 `about:config` 的 `xpinstall.signatures.required=false` 自行打包安装。
+
+首次安装后，Firefox 可能将小宇宙域名列为可选站点权限。若顶栏出现“Firefox 未授予访问小宇宙域名的权限”提示条，点击“授权访问”即可；也可在 `about:addons` → 本扩展 → 权限 中手动开启。
 
 ### 3. 安装 Native Host
 
-Native Host 用于目录选择、绝对路径下载、系统安全凭据读写，以及转写稿和总结文档落盘。
+Native Host 用于目录选择、绝对路径下载、系统安全凭据读写，以及转写稿和总结文档落盘。Firefox 的原生消息清单使用 `allowed_extensions`（扩展 ID）而不是 Chrome 的 `allowed_origins`（`chrome-extension://` URL），因此两份安装脚本都已按 Firefox 规范改写。
 
 #### macOS
-
-Chrome Web Store 安装版使用默认商店扩展 ID：
 
 ```bash
 chmod +x install_native_host.sh
 ./install_native_host.sh
 ```
 
-开发者模式需要传入扩展卡片显示的 ID：
+默认写入扩展 ID `xiaoyuzhou-desktop@qwe38qwe.github.io`；如打包时改过 gecko id，把它作为参数传入：
 
 ```bash
-./install_native_host.sh <你的开发版扩展ID>
+./install_native_host.sh <你的扩展ID>
 ```
 
-安装后，在 `chrome://extensions` 中重新加载扩展。
-
-如果移动了仓库目录、扩展 ID 发生变化，需使用新 ID 重新运行安装脚本。安装脚本会同时保留商店版和已安装开发版的扩展 ID。
+安装后，在 `about:debugging` 里点击“重新载入”扩展。
 
 设置页会显示实际扩展 ID、Manifest 路径、Host 路径和安装命令。macOS 默认路径为：
 
 ```text
-~/Library/Application Support/Google/Chrome/NativeMessagingHosts/com.xiaoyuzhou.desktop.json
+~/Library/Application Support/Mozilla/NativeMessagingHosts/com.xiaoyuzhou.desktop.json
 ~/Library/Application Support/Xiaoyuzhou Desktop Native Host/native-host
 ```
 
@@ -121,24 +120,24 @@ chmod +x install_native_host.sh
 
 #### Windows
 
-以 PowerShell 打开仓库目录，开发者模式传入扩展卡片显示的 ID：
+以 PowerShell 打开仓库目录直接运行即可；gecko id 已在脚本中作为默认值：
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\install_native_host.ps1 -ExtensionId <你的开发版扩展ID>
+powershell -ExecutionPolicy Bypass -File .\install_native_host.ps1
 ```
 
-商店安装版可省略 `-ExtensionId`。脚本会：
+如打包时改过扩展 ID，传入 `-ExtensionId <你的扩展ID>`。脚本会：
 
 - 将 Host 安装到 `%LOCALAPPDATA%\Xiaoyuzhou Desktop Native Host`
 - 生成 Native Messaging 可执行桥接器
-- 写入 Chrome 和 Edge 当前用户注册表
+- 写入 `HKCU:\Software\Mozilla\NativeMessagingHosts` 当前用户注册表
 - 使用 Windows DPAPI 加密 API Key
 
 Windows 支持目录选择、绝对路径保存、Qwen/豆包 ASR API 与 AI 总结 API。Windows
 暂不支持基于 MLX 的本地 Qwen3-ASR，请在“语音转写”中选择 API 模式。
 
-安装或更新 Native Host 后，请彻底退出所有 Chrome 进程再重新打开浏览器。仅关闭扩展
-窗口或点击“重新加载”可能不会刷新 Chrome 缓存的 Native Messaging 注册状态。
+安装或更新 Native Host 后，请彻底退出所有 Firefox 进程再重新打开浏览器。仅关闭扩展
+窗口或点击“重新载入”可能不会刷新 Firefox 缓存的 Native Messaging 注册状态。
 
 ### 4. 可选：安装本地 Qwen3-ASR
 
@@ -159,7 +158,7 @@ chmod +x install_local_asr.sh
 ## 使用
 
 1. 点击扩展图标打开桌面窗口
-2. 点击“登录”，在打开的小宇宙官方窗口完成登录，再返回扩展点击“同步官方登录”；登录态只保存在当前浏览器会话中，连续 60 分钟无账户请求或关闭浏览器后需要重新授权
+2. 点击右上角“登录”，用手机小宇宙 App 扫描弹出的二维码并在手机上确认；登录凭证保存在扩展本地存储中，直到你主动退出登录
 3. 在“设置”中分别配置音频、文字稿和 AI 总结稿保存目录
 4. 在“文字稿与 ASR”中选择本地 Qwen3-ASR、Qwen API 或豆包 API
 5. 点击“AI 总结”会自动导出缺失的文字稿并生成总结；已有总结的单集会显示“已 AI 总结”，再次点击需确认
@@ -249,7 +248,7 @@ AI 总结稿目录留空时沿用文字稿目录，已有用户升级后不会�
 
 完整隐私政策：[PRIVACY.md](PRIVACY.md)
 
-- 小宇宙登录凭证仅保存在 Chrome 当前浏览器会话中，连续 60 分钟无账户请求或关闭浏览器后清除
+- 小宇宙登录凭证（访问令牌与刷新令牌）保存在扩展的本地存储中，直到你主动点击“退出登录”；令牌仅用于向小宇宙官方接口发起请求
 - ASR 和 AI 总结 API Key 由 Native Host 保存到 macOS Keychain 或 Windows DPAPI，扩展存储和项目文件中不保存明文 Key
 - 从旧版本升级时，Native Host 仅在 Keychain 写入并校验成功后删除旧的 `asr_credentials.json`；迁移失败会保留原文件
 - 选择本地 Qwen3-ASR 时，音频和转写均留在本机，不会自动回退到云端 API
@@ -261,40 +260,47 @@ AI 总结稿目录留空时沿用文字稿目录，已有用户升级后不会�
 
 请勿将调试日志或包含用户数据的下载文件提交到 Git。
 
-## Chrome 权限
+## Firefox 权限
 
 | 权限 | 用途 |
 | --- | --- |
 | `storage` | 保存扩展设置和当前浏览器会话中的登录状态 |
-| `windows` | 创建和管理独立桌面窗口 |
-| `cookies` | 用户主动同步官方登录后，读取 `xiaoyuzhoufm.com` 下的访问与刷新凭证以建立扩展登录态 |
-| `alarms` | 在连续 60 分钟无账户请求后清除当前浏览器会话的登录态 |
 | `clipboardWrite` | 复制节目和单集链接 |
 | `downloads` | 保存到浏览器默认下载目录 |
 | `nativeMessaging` | 调用本地 Native Host |
 
-`host_permissions` 仅覆盖小宇宙 API、认证服务和媒体 CDN。
+Firefox 的 `windows` 不是可声明的权限项（相应 API 无需授权），原 Chrome 版的
+`windows`、`cookies`、`alarms` 声明已移除——这三种能力在代码中并未真正调用。
+
+`host_permissions` 仅覆盖小宇宙 API、认证服务和媒体 CDN。Firefox 把它们视为可撤销的
+站点权限：若被拒绝，扩展会显示提示条，点击“授权访问”调用
+`browser.permissions.request()` 重新申请。
 
 ## 开发检查
 
 ```bash
 node --check app.js
 node --check background.js
+node --test tests/
 /usr/bin/python3 -m py_compile native_host.py
 /usr/bin/python3 -m json.tool manifest.json >/dev/null
 sh -n install_native_host.sh
 sh -n install_local_asr.sh
 ```
 
+`tests/firefox_manifest.test.mjs` 会校验清单目标为 Firefox、后台脚本为事件页、
+权限项均在 Firefox 支持列表内、源码不再出现 `chrome.*` 或 `runtime.lastError` 回调，
+以及两份装脚本写入的是 `allowed_extensions` 和 Mozilla 注册表/目录。
+
 Windows 安装脚本可在 Windows PowerShell 中执行验证。
 
 ## 卸载 Native Host
 
-先从 Chrome 删除扩展，然后执行：
+先从 Firefox 删除扩展，然后执行：
 
 ```bash
 rm -rf "$HOME/Library/Application Support/Xiaoyuzhou Desktop Native Host"
-rm -f "$HOME/Library/Application Support/Google/Chrome/NativeMessagingHosts/com.xiaoyuzhou.desktop.json"
+rm -f "$HOME/Library/Application Support/Mozilla/NativeMessagingHosts/com.xiaoyuzhou.desktop.json"
 security delete-generic-password -s com.xiaoyuzhou.desktop -a asr.qwen 2>/dev/null || true
 security delete-generic-password -s com.xiaoyuzhou.desktop -a asr.doubao 2>/dev/null || true
 security delete-generic-password -s com.xiaoyuzhou.desktop -a summary.models 2>/dev/null || true
@@ -307,8 +313,7 @@ Windows 卸载：
 
 ```powershell
 Remove-Item "$env:LOCALAPPDATA\Xiaoyuzhou Desktop Native Host" -Recurse -Force
-Remove-Item "HKCU:\Software\Google\Chrome\NativeMessagingHosts\com.xiaoyuzhou.desktop" -Recurse -Force
-Remove-Item "HKCU:\Software\Microsoft\Edge\NativeMessagingHosts\com.xiaoyuzhou.desktop" -Recurse -Force
+Remove-Item "HKCU:\Software\Mozilla\NativeMessagingHosts\com.xiaoyuzhou.desktop" -Recurse -Force
 ```
 
 ## 已知限制
@@ -316,7 +321,8 @@ Remove-Item "HKCU:\Software\Microsoft\Edge\NativeMessagingHosts\com.xiaoyuzhou.d
 - 本地 Qwen3-ASR 当前仅支持 Apple Silicon；Intel Mac 请使用 API 模式
 - Windows 暂不支持本地 Qwen3-ASR；目录和云端 API 功能可用
 - 本项目依赖非公开稳定性承诺的小宇宙接口，接口变化可能导致部分功能失效
-- 当前未发布到 Chrome Web Store，需要通过开发者模式安装
+- 当前未发布到 AMO，需要通过 `about:debugging` 临时载入或自行签名安装
+- Firefox 没有 `windows.onBoundsChanged`，窗口尺寸只在窗口失焦时记录，恢复位置可能略有偏差
 
 ### Qwen ASR 404
 
@@ -324,7 +330,7 @@ Remove-Item "HKCU:\Software\Microsoft\Edge\NativeMessagingHosts\com.xiaoyuzhou.d
 
 1. 确认接口域名与 API Key 属于同一地域或 Workspace。
 2. 优先填写 Base URL，不要手工混用 `audio/asr/transcription`、`multimodal-generation/generation` 和 `chat/completions`。
-3. 重新运行 `install_native_host.sh`，并在 `chrome://extensions` 重新加载扩展。
+3. 重新运行 `install_native_host.sh`，并在 `about:debugging` 重新载入扩展。
 
 ## License
 
