@@ -39,7 +39,7 @@ test("every manifest permission and host pattern is valid for Firefox", () => {
 
 test("version is bumped past the last released build", () => {
   // AMO 拒绝重复版本号。0.5.11 已作为首个签名版本上传，之后任何改动都必须升版本。
-  const LAST_RELEASED = "0.6.0";
+  const LAST_RELEASED = "0.6.1";
   const version = manifest.version;
   const toParts = (v) => v.split(".").map((n) => Number.parseInt(n, 10));
   const [a, b, c] = toParts(version);

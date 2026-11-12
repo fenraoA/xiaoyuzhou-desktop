@@ -387,3 +387,35 @@ button:disabled { cursor: not-allowed; }
   min-width: 22px;
   text-align: right;
 }
+
+
+/* 信息流：标题栏动作区、计数、加载更多哨兵 */
+.section-heading-actions {
+  align-items: center;
+  display: flex;
+  gap: 10px;
+}
+.feed-count {
+  color: var(--ink-soft);
+  font: 10px "DM Mono", monospace;
+  letter-spacing: .07em;
+}
+#discover-refresh {
+  background: var(--paper-deep);
+  border-radius: 4px;
+  color: var(--ink);
+  font-size: 11px;
+  padding: 5px 10px;
+}
+#discover-refresh:hover { background: var(--yellow); }
+#discover-refresh:disabled { cursor: not-allowed; opacity: .6; }
+.feed-sentinel {
+  min-height: 1px;
+  padding-top: 14px;
+}
+.feed-more {
+  color: var(--ink-soft);
+  font: 11px "DM Mono", monospace;
+  padding: 16px 0 24px;
+  text-align: center;
+}

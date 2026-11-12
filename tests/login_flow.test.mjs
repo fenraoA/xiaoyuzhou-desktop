@@ -134,3 +134,37 @@ test("volume icon reflects the level", () => {
     assert.ok(body.includes(icon), `音量图标缺少 ${icon}`);
   }
 });
+
+test("subscriptions load every page instead of a hard-coded slice", () => {
+  // 旧实现是 limit 20 + slice(0,18)，订阅超过 18 个就显示不全
+  assert.equal(/slice\(0,\s*18\)/.test(appSource), false, "订阅列表不应截断到 18 个");
+  assert.equal(/slice\(0,\s*12\)/.test(appSource), false, "发现流不应截断到 12 个");
+
+  const start = appSource.indexOf("async function fetchAllSubscriptions");
+  assert.ok(start > 0, "缺少 fetchAllSubscriptions");
+  const end = appSource.indexOf("function renderSubscriptionCards", start);
+  const body = appSource.slice(start, end);
+  assert.ok(body.includes("loadMoreKey"), "订阅翻页应使用 loadMoreKey");
+  assert.match(body, /while \(page < SUBSCRIPTION_MAX_PAGES\)/, "翻页循环应有上限保护");
+  assert.ok(body.includes("seen.has(pid)"), "翻页结果需要按 pid 去重");
+});
+
+test("discover is a paginated feed with refresh and infinite scroll", () => {
+  // 刷新
+  assert.ok(appSource.includes("async function refreshDiscovery"), "缺少刷新逻辑");
+  // 加载更多
+  assert.ok(appSource.includes("async function loadMoreDiscovery"), "缺少加载更多");
+  // 滚动触发
+  assert.ok(appSource.includes("IntersectionObserver"), "需要滚动到底自动加载");
+  // 分页游标
+  assert.ok(appSource.includes("function loadMoreKeyOf"), "缺少分页游标解析");
+  // 防止重复请求
+  const start = appSource.indexOf("async function loadMoreDiscovery");
+  const end = appSource.indexOf("function bindDiscoverFeed", start);
+  const body = appSource.slice(start, end);
+  assert.ok(body.includes("state.feedLoading"), "并发滚轮会重复请求，需要 loading 锁");
+  assert.ok(body.includes("state.feedExhausted"), "需要到底标记，避免无限请求");
+
+  const html = readFileSync(path.join(projectRoot, "app.html"), "utf8");
+  assert.ok(!html.includes("discover-sentinel"), "哨兵节点应由 JS 注入，不应写死在静态 HTML");
+});

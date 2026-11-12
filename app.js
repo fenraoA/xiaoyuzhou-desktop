@@ -18,6 +18,11 @@ const state = {
   route: "discover",
   searchType: "episode",
   feed: [],
+  feedLoadMoreKey: "",
+  feedExhausted: false,
+  feedLoading: false,
+  feedPages: 0,
+  feedObserver: null,
   subscriptions: [],
   current: null,
   episodeDetails: new Map(),
@@ -112,6 +117,13 @@ function moreActions(content, className = "") {
 
 function closeActionMenu(target) {
   target?.closest(".action-menu")?.removeAttribute("open");
+}
+
+// 分页游标：小宇宙用 loadMoreKey（部分接口叫 loadNextKey）标记下一页
+function loadMoreKeyOf(response) {
+  const data = response?.data ?? response;
+  const key = data?.loadMoreKey ?? data?.loadNextKey ?? response?.loadMoreKey ?? response?.loadNextKey;
+  return typeof key === "string" && key ? key : "";
 }
 
 function dataOf(response) {
@@ -393,39 +405,167 @@ function renderDiscoverPage(root) {
       <div><div class="route-eyebrow">THE DAILY FREQUENCY</div><h1>今天，听点<br /><span>不一样的。</span></h1><p>从精选节目、热门单集和你可能喜欢的声音里，挑一段刚好适合此刻的陪伴。</p></div>
       <div class="hero-figure" aria-hidden="true"></div>
     </section>
-    <div class="section-heading"><h2>为你精选</h2><span>CURATED FOR YOU</span></div>
-    <div id="discover-feed" class="feed-grid"><div class="loading">正在接收今天的声音……</div></div>`;
-  loadDiscovery();
+    <div class="section-heading">
+      <h2>为你精选</h2>
+      <div class="section-heading-actions">
+        <span id="discover-count" class="feed-count"></span>
+        <button id="discover-refresh" class="mini-button" type="button" title="重新加载最新节目">刷新</button>
+      </div>
+    </div>
+    <div id="discover-feed" class="feed-grid"><div class="loading">正在接收今天的声音……</div></div>
+    <div id="discover-sentinel" class="feed-sentinel" aria-hidden="true"></div>`;
+  bindDiscoverFeed();
+  refreshDiscovery();
 }
 
-async function loadDiscovery() {
-  const holder = $("#discover-feed");
-  try {
-    let lastError;
-    for (const [endpoint, body] of [["/editor_pick", {}], ["/discovery", {}], ["/top_list", { category: "HOT" }]]) {
-      try {
-        const items = extractContent(await api(endpoint, body));
-        if (items.length) {
-          state.feed = items;
-          break;
-        }
-      } catch (error) {
-        lastError = error;
+const DISCOVER_PAGE_SIZE = 18;
+const DISCOVER_MAX_PAGES = 30;
+
+function appendFeedCards(holder, items, startIndex) {
+  const html = items.map((item, offset) => podcastCard(item, startIndex + offset)).join("");
+  holder.insertAdjacentHTML("beforeend", html);
+  bindCardActions(holder, state.feed);
+}
+
+function updateDiscoverCount() {
+  const counter = $("#discover-count");
+  if (counter) counter.textContent = `${state.feed.length} 个节目`;
+}
+
+function renderFeedStatus(text) {
+  const sentinel = $("#discover-sentinel");
+  if (!sentinel) return;
+  sentinel.innerHTML = text ? `<div class="feed-more">${esc(text)}</div>` : "";
+}
+
+// 依次尝试多个发现接口，拿到第一页
+async function fetchDiscoveryPage({ loadMoreKey = "" } = {}) {
+  const attempts = [
+    ["/editor_pick", loadMoreKey ? { loadMoreKey } : {}],
+    ["/discovery", loadMoreKey ? { loadMoreKey } : {}],
+    ["/top_list", { category: "HOT" }]
+  ];
+  let lastError;
+  for (const [endpoint, body] of attempts) {
+    try {
+      const response = await api(endpoint, body);
+      const items = extractContent(response);
+      if (items.length) {
+        return { items, loadMoreKey: loadMoreKeyOf(response) };
       }
+    } catch (error) {
+      lastError = error;
     }
-    if (!state.feed.length && lastError) {
-      throw lastError;
-    }
-    if (!state.feed.length) {
+  }
+  if (lastError) throw lastError;
+  return { items: [], loadMoreKey: "" };
+}
+
+async function refreshDiscovery() {
+  const holder = $("#discover-feed");
+  if (!holder) return;
+  state.feed = [];
+  state.feedLoadMoreKey = "";
+  state.feedExhausted = false;
+  state.feedLoading = false;
+  state.feedPages = 0;
+  holder.innerHTML = `<div class="loading">正在接收今天的声音……</div>`;
+  renderFeedStatus("");
+  try {
+    const page = await fetchDiscoveryPage();
+    if (!page.items.length) {
       holder.innerHTML = `<div class="empty">暂无发现内容。请确认登录状态或稍后重试。</div>`;
+      updateDiscoverCount();
       return;
     }
-    holder.innerHTML = state.feed.slice(0, 12).map((item, index) => podcastCard(item, index)).join("");
-    bindCardActions(holder, state.feed);
+    holder.innerHTML = "";
+    state.feed = page.items;
+    state.feedLoadMoreKey = page.loadMoreKey;
+    appendFeedCards(holder, page.items, 0);
+    updateDiscoverCount();
+    // 没有游标就说明这一轮只有一页
+    if (!page.loadMoreKey) {
+      state.feedExhausted = true;
+      renderFeedStatus("");
+    } else {
+      startFeedObserver();
+    }
   } catch (error) {
     holder.innerHTML = `<div class="empty">${esc(error.message)}<br /><button class="mini-button" data-action="login">去登录</button></div>`;
     holder.querySelector("[data-action=login]")?.addEventListener("click", openLogin);
   }
+}
+
+async function loadMoreDiscovery() {
+  if (state.feedLoading || state.feedExhausted || !state.feedLoadMoreKey) return;
+  if (state.feedPages >= DISCOVER_MAX_PAGES) {
+    state.feedExhausted = true;
+    renderFeedStatus("已经到底了");
+    return;
+  }
+  state.feedLoading = true;
+  renderFeedStatus("正在加载更多……");
+  try {
+    const page = await fetchDiscoveryPage({ loadMoreKey: state.feedLoadMoreKey });
+    const holder = $("#discover-feed");
+    if (!page.items.length) {
+      state.feedExhausted = true;
+      renderFeedStatus("已经到底了");
+      return;
+    }
+    // 去重后再追加，避免接口重复返回同一条
+    const seen = new Set(state.feed.map((item) => `${episodeIdOf(item)}:${podcastIdOf(item)}`));
+    const fresh = page.items.filter((item) => {
+      const key = `${episodeIdOf(item)}:${podcastIdOf(item)}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+    if (!fresh.length) {
+      state.feedExhausted = true;
+      renderFeedStatus("已经到底了");
+      return;
+    }
+    const startIndex = state.feed.length;
+    state.feed = state.feed.concat(fresh);
+    state.feedPages = (state.feedPages || 0) + 1;
+    appendFeedCards(holder, fresh, startIndex);
+    updateDiscoverCount();
+    state.feedLoadMoreKey = page.loadMoreKey;
+    if (!page.loadMoreKey) {
+      state.feedExhausted = true;
+      renderFeedStatus("已经到底了");
+    } else {
+      renderFeedStatus("");
+    }
+  } catch (error) {
+    renderFeedStatus(`加载失败：${error.message}`);
+  } finally {
+    state.feedLoading = false;
+  }
+}
+
+function bindDiscoverFeed() {
+  $("#discover-refresh")?.addEventListener("click", () => {
+    refreshDiscovery().catch((error) => notify(error.message));
+  });
+}
+
+// 首屏渲染完成后再开始观察哨兵：否则哨兵在空列表时就已可见，
+// 会立刻触发一次 loadMore，把两页直接叠在一起。
+function startFeedObserver() {
+  if (state.feedObserver) {
+    state.feedObserver.disconnect();
+    state.feedObserver = null;
+  }
+  const sentinel = $("#discover-sentinel");
+  if (!sentinel || typeof IntersectionObserver !== "function") return;
+  if (state.feedExhausted || !state.feedLoadMoreKey) return;
+  const observer = new IntersectionObserver((entries) => {
+    if (entries.some((entry) => entry.isIntersecting)) loadMoreDiscovery();
+  }, { rootMargin: "240px" });
+  observer.observe(sentinel);
+  state.feedObserver = observer;
 }
 
 function podcastCard(item, index) {
@@ -625,18 +765,60 @@ function bindSearchRows(holder, items) {
 }
 
 function renderSubscriptionsPage(root) {
-  root.innerHTML = `<section><div class="section-heading"><h2>我的订阅</h2><span>YOUR SUBSCRIPTIONS</span></div><div id="subscriptions-list" class="feed-grid"><div class="loading">正在读取你的订阅……</div></div></section>`;
+  root.innerHTML = `<section><div class="section-heading">
+      <h2>我的订阅</h2>
+      <div class="section-heading-actions">
+        <span id="subscriptions-count" class="feed-count"></span>
+        <span>YOUR SUBSCRIPTIONS</span>
+      </div>
+    </div><div id="subscriptions-list" class="feed-grid"><div class="loading">正在读取你的订阅……</div></div></section>`;
   loadSubscriptions();
+}
+
+const SUBSCRIPTION_PAGE_SIZE = 50;
+// 单次加载的硬性上限，防止接口异常时无限翻页
+const SUBSCRIPTION_MAX_PAGES = 40;
+
+async function fetchAllSubscriptions() {
+  const collected = [];
+  const seen = new Set();
+  let loadMoreKey = "";
+  let page = 0;
+  while (page < SUBSCRIPTION_MAX_PAGES) {
+    const body = { limit: String(SUBSCRIPTION_PAGE_SIZE), sortOrder: "desc", sortBy: "subscribedAt" };
+    if (loadMoreKey) body.loadMoreKey = loadMoreKey;
+    const response = await api("/subscription", body);
+    const pageItems = listOf(response).map(itemOf).filter((item) => item?.type === "PODCAST");
+    for (const item of pageItems) {
+      const pid = podcastIdOf(item);
+      if (!pid || seen.has(pid)) continue;
+      seen.add(pid);
+      collected.push(item);
+    }
+    // 没有游标说明已经到底；返回空页也视为到底，避免死循环
+    const next = loadMoreKeyOf(response);
+    if (!next || next === loadMoreKey || !pageItems.length) break;
+    loadMoreKey = next;
+    page += 1;
+  }
+  return collected;
+}
+
+function renderSubscriptionCards(holder, items) {
+  holder.innerHTML = items.length
+    ? items.map((item, index) => podcastCard(item, index)).join("")
+    : `<div class="empty">还没有订阅节目。去发现页逛逛吧。</div>`;
+  bindCardActions(holder, items);
 }
 
 async function loadSubscriptions() {
   const holder = $("#subscriptions-list");
   try {
-    const response = await api("/subscription", { limit: "20", sortOrder: "desc", sortBy: "subscribedAt" });
-    state.subscriptions = listOf(response).map(itemOf).filter((item) => item?.type === "PODCAST");
+    state.subscriptions = await fetchAllSubscriptions();
     state.subscriptions.forEach((item) => state.subscribedPids.add(podcastIdOf(item)));
-    holder.innerHTML = state.subscriptions.length ? state.subscriptions.slice(0, 18).map((item, index) => podcastCard(item, index)).join("") : `<div class="empty">还没有订阅节目。去发现页逛逛吧。</div>`;
-    bindCardActions(holder, state.subscriptions);
+    renderSubscriptionCards(holder, state.subscriptions);
+    const counter = $("#subscriptions-count");
+    if (counter) counter.textContent = `${state.subscriptions.length} 个节目`;
   } catch (error) {
     holder.innerHTML = `<div class="empty">${esc(error.message)}<br /><button class="mini-button" data-action="login">去登录</button></div>`;
     holder.querySelector("[data-action=login]")?.addEventListener("click", openLogin);
