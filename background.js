@@ -160,8 +160,22 @@ const DEFAULT_SETTINGS = {
 
 const UPSTREAM = {
   api: "https://api.xiaoyuzhoufm.com",
-  auth: "https://podcaster-api.xiaoyuzhoufm.com"
+  // 网页端登录走 web-api；podcaster-api 是主播后台，不接受通用登录
+  auth: "https://web-api.xiaoyuzhoufm.com"
 };
+
+// 小宇宙网页端的 midway 应用标识，扫码登录接口会校验该请求头
+const WEB_AUTH_HEADERS = {
+  "Content-Type": "application/json",
+  "Accept": "application/json",
+  "App-Version": "5.7.0",
+  "Origin": "https://www.xiaoyuzhoufm.com",
+  "Referer": "https://www.xiaoyuzhoufm.com/",
+  "x-midway-app-id": "v6worU4NnWyL"
+};
+
+// 网页端扫码登录使用的 clientId
+const WEB_AUTH_CLIENT_ID = "podcaster-platform";
 
 const API_ENDPOINTS = {
   "/discovery": "/v1/discovery-feed/list",
@@ -244,7 +258,7 @@ function normalizeSummarySettings(input = {}) {
 }
 
 async function getSettings() {
-  const { [SETTINGS_KEY]: settings = {} } = await chrome.storage.local.get(SETTINGS_KEY);
+  const { [SETTINGS_KEY]: settings = {} } = await browser.storage.local.get(SETTINGS_KEY);
   let merged = { ...DEFAULT_SETTINGS, ...settings };
   let changed = false;
   if ((settings.asrSettingsVersion || 0) < ASR_SETTINGS_VERSION) {
@@ -266,17 +280,17 @@ async function getSettings() {
   }
   if ((settings.summarySettingsVersion || 0) < SUMMARY_SETTINGS_VERSION) changed = true;
   merged = normalizeSummarySettings(merged);
-  if (changed) await chrome.storage.local.set({ [SETTINGS_KEY]: merged });
+  if (changed) await browser.storage.local.set({ [SETTINGS_KEY]: merged });
   return merged;
 }
 
 async function getAuth() {
-  const { [AUTH_KEY]: auth = null } = await chrome.storage.local.get(AUTH_KEY);
+  const { [AUTH_KEY]: auth = null } = await browser.storage.local.get(AUTH_KEY);
   return auth;
 }
 
 async function saveAuth(auth) {
-  await chrome.storage.local.set({ [AUTH_KEY]: auth });
+  await browser.storage.local.set({ [AUTH_KEY]: auth });
   return auth;
 }
 
@@ -287,7 +301,7 @@ async function authWithDeviceId(auth) {
 }
 
 async function clearAuth() {
-  await chrome.storage.local.remove(AUTH_KEY);
+  await browser.storage.local.remove(AUTH_KEY);
 }
 
 function sanitizeBounds(bounds = {}) {
@@ -300,12 +314,12 @@ function sanitizeBounds(bounds = {}) {
 }
 
 async function storedWindow() {
-  const { [WINDOW_KEY]: windowId } = await chrome.storage.session.get(WINDOW_KEY);
+  const { [WINDOW_KEY]: windowId } = await browser.storage.session.get(WINDOW_KEY);
   if (!Number.isInteger(windowId)) return null;
   try {
-    return await chrome.windows.get(windowId, { populate: true });
+    return await browser.windows.get(windowId, { populate: true });
   } catch {
-    await chrome.storage.session.remove(WINDOW_KEY);
+    await browser.storage.session.remove(WINDOW_KEY);
     return null;
   }
 }
@@ -313,19 +327,40 @@ async function storedWindow() {
 async function openAppWindow() {
   const existing = await storedWindow();
   if (existing) {
-    await chrome.windows.update(existing.id, { focused: true });
+    await browser.windows.update(existing.id, { focused: true });
     return existing;
   }
 
-  const { [BOUNDS_KEY]: savedBounds } = await chrome.storage.local.get(BOUNDS_KEY);
-  const created = await chrome.windows.create({
-    url: chrome.runtime.getURL("app.html"),
+  const { [BOUNDS_KEY]: savedBounds } = await browser.storage.local.get(BOUNDS_KEY);
+  const created = await browser.windows.create({
+    url: browser.runtime.getURL("app.html"),
     type: "popup",
     focused: true,
     ...sanitizeBounds(savedBounds)
   });
-  if (Number.isInteger(created.id)) await chrome.storage.session.set({ [WINDOW_KEY]: created.id });
+  if (Number.isInteger(created.id)) await browser.storage.session.set({ [WINDOW_KEY]: created.id });
   return created;
+}
+
+const REQUIRED_ORIGINS = [
+  "https://api.xiaoyuzhoufm.com/*",
+  "https://podcaster-api.xiaoyuzhoufm.com/*",
+  "https://*.xiaoyuzhoufm.com/*",
+  "https://*.xyzcdn.net/*"
+];
+
+async function hasHostPermissions() {
+  try {
+    return await browser.permissions.contains({ origins: REQUIRED_ORIGINS });
+  } catch {
+    // 查询失败时按「没有权限」处理，让界面能提示用户重新授权，而不是静默当作已授权
+    return false;
+  }
+}
+
+async function requestHostPermissions() {
+  if (await hasHostPermissions()) return true;
+  return browser.permissions.request({ origins: REQUIRED_ORIGINS });
 }
 
 function upstreamUrl(path) {
@@ -382,24 +417,21 @@ function normalizeAbsolutePath(path, label) {
     : value.replace(/\/+$/, "") || "/";
 }
 
-function nativeHostRequest(message) {
-  return new Promise((resolve, reject) => {
-    chrome.runtime.sendNativeMessage(NATIVE_HOST, message, (response) => {
-      if (chrome.runtime.lastError) {
-        reject(new Error(`本地助手不可用：${chrome.runtime.lastError.message}`));
-        return;
-      }
-      if (!response?.ok) {
-        reject(new Error(response?.error || "本地助手执行失败"));
-        return;
-      }
-      resolve(response.data);
-    });
-  });
+async function nativeHostRequest(message) {
+  let response;
+  try {
+    response = await browser.runtime.sendNativeMessage(NATIVE_HOST, message);
+  } catch (error) {
+    throw new Error(`本地助手不可用：${error?.message || "无法连接本地助手"}`);
+  }
+  if (!response?.ok) {
+    throw new Error(response?.error || "本地助手执行失败");
+  }
+  return response.data;
 }
 
 async function getNativeHostStatus() {
-  const extensionId = chrome.runtime.id;
+  const extensionId = browser.runtime.id;
   const platformHint = /Windows/i.test(navigator.userAgent || "")
     ? "windows"
     : "macos";
@@ -410,7 +442,7 @@ async function getNativeHostStatus() {
     platform: platformHint,
     manifestPath: isWindows
       ? "%LOCALAPPDATA%\\Xiaoyuzhou Desktop Native Host\\com.xiaoyuzhou.desktop.json"
-      : "~/Library/Application Support/Google/Chrome/NativeMessagingHosts/com.xiaoyuzhou.desktop.json",
+      : "~/Library/Application Support/Mozilla/NativeMessagingHosts/com.xiaoyuzhou.desktop.json",
     hostPath: isWindows
       ? "%LOCALAPPDATA%\\Xiaoyuzhou Desktop Native Host\\native-host.exe"
       : "~/Library/Application Support/Xiaoyuzhou Desktop Native Host/native-host",
@@ -444,7 +476,7 @@ async function getNativeHostStatus() {
       available: true,
       ...data,
       manifestPath: home
-        ? `${home}/Library/Application Support/Google/Chrome/NativeMessagingHosts/${NATIVE_HOST}.json`
+        ? `${home}/Library/Application Support/Mozilla/NativeMessagingHosts/${NATIVE_HOST}.json`
         : base.manifestPath,
       hostPath: home
         ? `${home}/Library/Application Support/Xiaoyuzhou Desktop Native Host/native-host`
@@ -456,7 +488,7 @@ async function getNativeHostStatus() {
 }
 
 async function getSummaryHistory() {
-  const { [SUMMARY_HISTORY_KEY]: value = {} } = await chrome.storage.local.get(
+  const { [SUMMARY_HISTORY_KEY]: value = {} } = await browser.storage.local.get(
     SUMMARY_HISTORY_KEY
   );
   return Object.fromEntries(
@@ -487,7 +519,7 @@ async function recordSummaryHistory(episodeId, result) {
       String(left[1].createdAt).localeCompare(String(right[1].createdAt))
     ))
     .slice(-500);
-  await chrome.storage.local.set({
+  await browser.storage.local.set({
     [SUMMARY_HISTORY_KEY]: Object.fromEntries(entries)
   });
 }
@@ -512,7 +544,7 @@ async function downloadAudio({ url, filename }) {
   }
   const folder = normalizeDownloadFolder(settings.downloadFolder);
   const targetName = safeDownloadFilename(filename);
-  return chrome.downloads.download({
+  return browser.downloads.download({
     url: parsed.toString(),
     filename: folder ? `${folder}/${targetName}` : targetName,
     conflictAction: "uniquify",
@@ -636,7 +668,7 @@ async function fetchEpisodeComments(episodeId) {
   if (!/^[A-Za-z0-9_-]+$/.test(eid)) {
     throw new Error("无法识别需要抓取评论的单集");
   }
-  const response = await fetch(
+  const response = await guardedFetch(
     `https://www.xiaoyuzhoufm.com/episode/${encodeURIComponent(eid)}`,
     {
       method: "GET",
@@ -713,7 +745,7 @@ async function requestJson({ path, method = "POST", body, auth, retry = true }) 
     headers["x-jike-refresh-token"] = auth.refreshToken;
   }
 
-  const response = await fetch(url, {
+  const response = await guardedFetch(url, {
     method,
     headers,
     body: method === "GET" ? undefined : JSON.stringify(body ?? {})
@@ -727,7 +759,6 @@ async function requestJson({ path, method = "POST", body, auth, retry = true }) 
   }
 
   // #region debug-point A:episode-detail-shape
-  if (globalThis.__XYZ_DEBUG_PLATFORM_TRANSCRIPT__ && path === "/episode_detail") fetch("http://127.0.0.1:7777/event", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ sessionId: "platform-transcript-source", runId: "pre-fix", hypothesisId: "A", location: "background.js:requestJson", msg: "[DEBUG] Episode detail response observed", data: { status: response.status, topLevelKeys: Object.keys(data || {}).slice(0, 20), episodeKeys: Object.keys(data?.data || {}).filter((key) => /^(eid|media|transcript|shownotes|duration)$/i.test(key)).sort() }, ts: Date.now() }) }).catch(() => {});
   // #endregion
 
   if (response.status === 401 && retry && auth?.refreshToken) {
@@ -748,7 +779,7 @@ async function refreshToken(auth) {
   const url = settings.apiMode === "proxy" && settings.proxyBaseUrl
     ? proxyUrl(settings.proxyBaseUrl, "/refresh_token")
     : upstreamUrl("/app_auth_tokens.refresh");
-  const response = await fetch(url, {
+  const response = await guardedFetch(url, {
     method: "POST",
     headers: withAppHeaders(auth, { "x-jike-refresh-token": auth.refreshToken }),
     body: settings.apiMode === "proxy" ? JSON.stringify({
@@ -760,7 +791,7 @@ async function refreshToken(auth) {
     await clearAuth();
     throw new Error("登录已过期，请重新登录");
   }
-  const json = await response.json();
+  const json = await readJsonSafe(response, "刷新登录状态失败");
   const next = {
     ...auth,
     accessToken: json?.data?.accessToken || json?.data?.access_token || json?.data?.["x-jike-access-token"] || response.headers.get("x-jike-access-token") || auth.accessToken,
@@ -769,43 +800,98 @@ async function refreshToken(auth) {
   return saveAuth(next);
 }
 
-async function loginWithSms({ areaCode = "+86", mobilePhoneNumber, verifyCode }) {
-  const settings = await getSettings();
-  const path = "/v1/auth/login-with-sms";
-  const url = settings.apiMode === "proxy" && settings.proxyBaseUrl
-    ? proxyUrl(settings.proxyBaseUrl, "/login")
-    : upstreamUrl(path);
-  const response = await fetch(url, {
-    method: "POST",
-    headers: { ...APP_HEADERS, Origin: "https://podcaster.xiaoyuzhoufm.com" },
-    body: JSON.stringify({ areaCode, mobilePhoneNumber, verifyCode })
-  });
-  const data = await response.json();
-  if (!response.ok) throw new Error(data?.message || data?.msg || "登录失败");
-  const auth = {
-    user: data?.data?.user || data?.data?.data || data?.data || data?.user || null,
-    accessToken: data?.data?.accessToken || data?.data?.access_token || data?.data?.["x-jike-access-token"] || response.headers.get("x-jike-access-token"),
-    refreshToken: data?.data?.refreshToken || data?.data?.refresh_token || data?.data?.["x-jike-refresh-token"] || response.headers.get("x-jike-refresh-token"),
-    deviceId: crypto.randomUUID()
-  };
-  if (!auth.accessToken) throw new Error("登录成功但没有收到访问凭证");
-  return saveAuth(auth);
+function webAuthUrl(path) {
+  return `${UPSTREAM.auth}${path}`;
 }
 
-async function sendSmsCode({ areaCode = "+86", mobilePhoneNumber }) {
-  const settings = await getSettings();
-  const path = "/v1/auth/send-code";
-  const url = settings.apiMode === "proxy" && settings.proxyBaseUrl
-    ? proxyUrl(settings.proxyBaseUrl, "/send-code")
-    : upstreamUrl(path);
-  const response = await fetch(url, {
+function authFromPayload(payload, response) {
+  const data = payload?.data ?? payload ?? {};
+  return {
+    user: data.user || data.data?.user || null,
+    accessToken: data.accessToken
+      || data.access_token
+      || data["x-jike-access-token"]
+      || response?.headers?.get("x-jike-access-token")
+      || null,
+    refreshToken: data.refreshToken
+      || data.refresh_token
+      || data["x-jike-refresh-token"]
+      || response?.headers?.get("x-jike-refresh-token")
+      || null,
+    deviceId: crypto.randomUUID()
+  };
+}
+
+// 创建扫码登录二维码，返回 { id, url }
+async function createLoginQrcode() {
+  const response = await guardedFetch(webAuthUrl("/v1/auth/qrcode/create"), {
     method: "POST",
-    headers: { ...APP_HEADERS, Origin: "https://podcaster.xiaoyuzhoufm.com" },
-    body: JSON.stringify({ areaCode, mobilePhoneNumber })
+    headers: WEB_AUTH_HEADERS,
+    body: JSON.stringify({ clientId: WEB_AUTH_CLIENT_ID })
   });
-  const data = await response.json();
-  if (!response.ok) throw new Error(data?.message || data?.msg || "验证码发送失败");
-  return data;
+  const payload = await readJsonSafe(response, "无法创建登录二维码");
+  if (!response.ok || !payload?.id || !payload?.url) {
+    throw new Error(payload?.toast || payload?.message || "无法创建登录二维码");
+  }
+  return { id: payload.id, url: payload.url };
+}
+
+// 轮询扫码状态；扫码确认后服务端返回登录凭证
+async function pollLoginQrcode({ id }) {
+  if (!id) throw new Error("登录二维码已失效，请重新获取");
+  const response = await guardedFetch(webAuthUrl("/v1/auth/qrcode/login"), {
+    method: "POST",
+    headers: WEB_AUTH_HEADERS,
+    body: JSON.stringify({ id })
+  });
+  const payload = await readJsonSafe(response, "查询扫码状态失败");
+  if (!response.ok) {
+    throw new Error(payload?.toast || payload?.message || "查询扫码状态失败");
+  }
+  const status = String(payload?.status || "").toUpperCase();
+  if (status === "WAITTING" || status === "WAITING") {
+    return { status: "waiting" };
+  }
+  const auth = authFromPayload(payload, response);
+  if (!auth.accessToken) {
+    if (status === "SCANNED") return { status: "scanned" };
+    if (status === "EXPIRED") return { status: "expired" };
+    if (status === "CANCELED" || status === "CANCELLED") return { status: "canceled" };
+    return { status: status ? status.toLowerCase() : "waiting" };
+  }
+  await saveAuth(auth);
+  return { status: "authorized", user: auth.user };
+}
+
+async function readJsonSafe(response, fallbackMessage) {
+  const contentType = response.headers.get("content-type") || "";
+  const raw = await response.text();
+  if (contentType.includes("application/json")) {
+    try {
+      return JSON.parse(raw);
+    } catch {
+      throw new Error(`${fallbackMessage}（响应无法解析）`);
+    }
+  }
+  const snippet = raw.replace(/\s+/g, " ").trim().slice(0, 120);
+  if (response.status === 401) {
+    throw new Error(`${fallbackMessage}：登录状态已失效，请重新扫码登录`);
+  }
+  if (response.status === 404) {
+    throw new Error(`${fallbackMessage}：接口地址已变更`);
+  }
+  throw new Error(`${fallbackMessage}（HTTP ${response.status}${snippet ? `：${snippet}` : ""}）`);
+}
+
+async function guardedFetch(url, init) {
+  try {
+    return await fetch(url, init);
+  } catch (error) {
+    if (!(await hasHostPermissions())) {
+      throw new Error("缺少网站访问权限，请在扩展设置中授权后重试");
+    }
+    throw error;
+  }
 }
 
 async function fetchApi({ endpoint, method = "POST", body = {} }) {
@@ -865,7 +951,7 @@ async function updateSettings(next) {
       ].filter(Boolean)
     });
   }
-  await chrome.storage.local.set({ [SETTINGS_KEY]: settings });
+  await browser.storage.local.set({ [SETTINGS_KEY]: settings });
   return settings;
 }
 
@@ -884,10 +970,10 @@ async function handleMessage(message) {
       return getSummaryHistory();
     case "update-settings":
       return updateSettings(message.settings);
-    case "send-code":
-      return sendSmsCode(message.payload);
-    case "login":
-      return loginWithSms(message.payload);
+    case "create-login-qrcode":
+      return createLoginQrcode();
+    case "poll-login-qrcode":
+      return pollLoginQrcode(message.payload || {});
     case "api":
       return fetchApi(message.payload);
     case "download-audio":
@@ -896,6 +982,10 @@ async function handleMessage(message) {
       return transcribeAudio(message.payload);
     case "export-official-transcript":
       return exportOfficialTranscript(message.payload);
+    case "check-host-permissions":
+      return { granted: await hasHostPermissions() };
+    case "request-host-permissions":
+      return { granted: await requestHostPermissions() };
     case "get-native-host-status":
       return getNativeHostStatus();
     case "save-asr-credentials":
@@ -921,29 +1011,53 @@ async function handleMessage(message) {
   }
 }
 
-chrome.action.onClicked.addListener(() => openAppWindow().catch(console.error));
+browser.action.onClicked.addListener(() => openAppWindow().catch(console.error));
 
-chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
-  handleMessage(message)
-    .then((data) => sendResponse({ ok: true, data }))
-    .catch((error) => sendResponse({ ok: false, error: error.message || "请求失败", status: error.status || 0 }));
-  return true;
+browser.runtime.onMessage.addListener((message) => {
+  return handleMessage(message)
+    .then((data) => ({ ok: true, data }))
+    .catch((error) => ({
+      ok: false,
+      error: error.message || "请求失败",
+      status: error.status || 0
+    }));
 });
 
-chrome.runtime.onInstalled.addListener(async () => {
-  const { [SETTINGS_KEY]: settings } = await chrome.storage.local.get(SETTINGS_KEY);
-  if (!settings) await chrome.storage.local.set({ [SETTINGS_KEY]: DEFAULT_SETTINGS });
+browser.runtime.onInstalled.addListener(async () => {
+  const { [SETTINGS_KEY]: settings } = await browser.storage.local.get(SETTINGS_KEY);
+  if (!settings) await browser.storage.local.set({ [SETTINGS_KEY]: DEFAULT_SETTINGS });
 });
 
-chrome.windows.onBoundsChanged.addListener(async (window) => {
-  const current = await storedWindow();
-  if (!current || current.id !== window.id || window.state !== "normal") return;
-  await chrome.storage.local.set({
-    [BOUNDS_KEY]: sanitizeBounds({ width: window.width, height: window.height, left: window.left, top: window.top })
+async function rememberWindowBounds(window) {
+  if (!window || window.state !== "normal") return;
+  await browser.storage.local.set({
+    [BOUNDS_KEY]: sanitizeBounds({
+      width: window.width,
+      height: window.height,
+      left: window.left,
+      top: window.top
+    })
   });
-});
+}
 
-chrome.windows.onRemoved.addListener(async (windowId) => {
-  const { [WINDOW_KEY]: storedId } = await chrome.storage.session.get(WINDOW_KEY);
-  if (windowId === storedId) await chrome.storage.session.remove(WINDOW_KEY);
+if (browser.windows.onBoundsChanged) {
+  browser.windows.onBoundsChanged.addListener(async (window) => {
+    const current = await storedWindow();
+    if (!current || current.id !== window.id) return;
+    await rememberWindowBounds(window);
+  });
+} else {
+  // Firefox 没有 onBoundsChanged：窗口失去焦点时记录一次尺寸。
+  browser.windows.onFocusChanged.addListener(async (windowId) => {
+    const current = await storedWindow();
+    if (!current) return;
+    if (windowId === browser.windows.WINDOW_ID_NONE || windowId !== current.id) {
+      await rememberWindowBounds(current);
+    }
+  });
+}
+
+browser.windows.onRemoved.addListener(async (windowId) => {
+  const { [WINDOW_KEY]: storedId } = await browser.storage.session.get(WINDOW_KEY);
+  if (windowId === storedId) await browser.storage.session.remove(WINDOW_KEY);
 });

@@ -1,12 +1,12 @@
 param(
-  [string]$ExtensionId = "jgcegnegoifbcokpipkogolkmodkcceb"
+  [string]$ExtensionId = "xiaoyuzhou-desktop@qwe38qwe.github.io"
 )
 
 $ErrorActionPreference = "Stop"
 $HostName = "com.xiaoyuzhou.desktop"
 
-if ($ExtensionId -notmatch "^[a-p]{32}$") {
-  throw "Invalid Chrome extension ID: $ExtensionId"
+if ($ExtensionId -notmatch "^[^\s@]+@[^\s@]+$") {
+  throw "Invalid extension ID: $ExtensionId (Firefox requires an ID like name@example.org)"
 }
 
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
@@ -115,17 +115,17 @@ if (Test-Path $Launcher) {
 }
 Add-Type -TypeDefinition $Source -Language CSharp -OutputAssembly $Launcher -OutputType ConsoleApplication
 
-$AllowedOrigins = @(
-  "chrome-extension://jgcegnegoifbcokpipkogolkmodkcceb/",
-  "chrome-extension://$ExtensionId/"
+$AllowedExtensions = @(
+  "xiaoyuzhou-desktop@qwe38qwe.github.io",
+  $ExtensionId
 ) | Sort-Object -Unique
 
 if (Test-Path $ManifestPath) {
   try {
     $Existing = Get-Content $ManifestPath -Raw | ConvertFrom-Json
-    $AllowedOrigins += @($Existing.allowed_origins)
-    $AllowedOrigins = $AllowedOrigins |
-      Where-Object { $_ -match "^chrome-extension://[a-p]{32}/$" } |
+    $AllowedExtensions += @($Existing.allowed_extensions)
+    $AllowedExtensions = $AllowedExtensions |
+      Where-Object { $_ -match "^[^\s@]+@[^\s@]+$" } |
       Sort-Object -Unique
   } catch {
   }
@@ -136,7 +136,7 @@ $Manifest = @{
   description = "Xiaoyuzhou Desktop local file and API helper"
   path = $Launcher
   type = "stdio"
-  allowed_origins = @($AllowedOrigins)
+  allowed_extensions = @($AllowedExtensions)
 }
 $ManifestJson = $Manifest | ConvertTo-Json -Depth 4
 [IO.File]::WriteAllText(
@@ -145,15 +145,12 @@ $ManifestJson = $Manifest | ConvertTo-Json -Depth 4
   (New-Object Text.UTF8Encoding($false))
 )
 
-$ChromeRegistry = "HKCU:\Software\Google\Chrome\NativeMessagingHosts\$HostName"
-New-Item -Path $ChromeRegistry -Force | Out-Null
-Set-Item -Path $ChromeRegistry -Value $ManifestPath
-
-$EdgeRegistry = "HKCU:\Software\Microsoft\Edge\NativeMessagingHosts\$HostName"
-New-Item -Path $EdgeRegistry -Force | Out-Null
-Set-Item -Path $EdgeRegistry -Value $ManifestPath
+$FirefoxRegistry = "HKCU:\Software\Mozilla\NativeMessagingHosts\$HostName"
+New-Item -Path $FirefoxRegistry -Force | Out-Null
+Set-Item -Path $FirefoxRegistry -Value $ManifestPath
 
 Write-Host "Native Host installed: $ManifestPath"
 Write-Host "Extension ID added: $ExtensionId"
-Write-Host "Fully exit every Chrome process, then reopen Chrome."
+Write-Host "Registry key written: $FirefoxRegistry"
+Write-Host "Fully exit every Firefox process, then reopen Firefox."
 

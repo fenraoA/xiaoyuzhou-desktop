@@ -2,7 +2,7 @@
 set -eu
 
 HOST_NAME="com.xiaoyuzhou.desktop"
-DEFAULT_EXTENSION_ID="jgcegnegoifbcokpipkogolkmodkcceb"
+DEFAULT_EXTENSION_ID="xiaoyuzhou-desktop@qwe38qwe.github.io"
 EXTENSION_ID="${1:-$DEFAULT_EXTENSION_ID}"
 SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
 SOURCE_HOST_SCRIPT="$SCRIPT_DIR/native_host.py"
@@ -11,12 +11,18 @@ INSTALL_DIR="$HOME/Library/Application Support/Xiaoyuzhou Desktop Native Host"
 HOST_SCRIPT="$INSTALL_DIR/native_host.py"
 LOCAL_WORKER="$INSTALL_DIR/local_asr_worker.py"
 HOST_LAUNCHER="$INSTALL_DIR/native-host"
-MANIFEST_DIR="$HOME/Library/Application Support/Google/Chrome/NativeMessagingHosts"
+if [ -n "${FIREFOX_NATIVE_MANIFEST_DIR:-}" ]; then
+  MANIFEST_DIR="$FIREFOX_NATIVE_MANIFEST_DIR"
+else
+  MANIFEST_DIR="$HOME/Library/Application Support/Mozilla/NativeMessagingHosts"
+fi
 MANIFEST_PATH="$MANIFEST_DIR/$HOST_NAME.json"
 
 case "$EXTENSION_ID" in
-  *[!a-p]*|"")
-    echo "无效的 Chrome 扩展 ID：$EXTENSION_ID" >&2
+  *@*)
+    ;;
+  *)
+    echo "无效的扩展 ID：$EXTENSION_ID（Firefox 需要形如 name@example.org 的 ID）" >&2
     exit 1
     ;;
 esac
@@ -43,18 +49,18 @@ import sys
 from pathlib import Path
 
 manifest_path, host_launcher, default_extension_id, extension_id = sys.argv[1:]
-allowed_origins = {
-    f"chrome-extension://{default_extension_id}/",
-    f"chrome-extension://{extension_id}/",
+allowed_extensions = {
+    default_extension_id,
+    extension_id,
 }
 path = Path(manifest_path)
 if path.is_file():
     try:
         current = json.loads(path.read_text(encoding="utf-8"))
-        allowed_origins.update(
-            origin
-            for origin in current.get("allowed_origins", [])
-            if re.fullmatch(r"chrome-extension://[a-p]{32}/", str(origin))
+        allowed_extensions.update(
+            value
+            for value in current.get("allowed_extensions", [])
+            if re.fullmatch(r"[^\s]+@[^\s]+", str(value))
         )
     except (OSError, ValueError, TypeError):
         pass
@@ -63,7 +69,7 @@ manifest = {
     "description": "Xiaoyuzhou Desktop local file and ASR helper",
     "path": host_launcher,
     "type": "stdio",
-    "allowed_origins": sorted(allowed_origins),
+    "allowed_extensions": sorted(allowed_extensions),
 }
 with path.open("w", encoding="utf-8") as file:
     json.dump(manifest, file, ensure_ascii=False, indent=2)
