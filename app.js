@@ -23,7 +23,10 @@ const state = {
   feedLoading: false,
   feedPages: 0,
   feedObserver: null,
+  pendingProgress: null,
+  progressTimer: null,
   subscriptions: [],
+  history: [],
   current: null,
   episodeDetails: new Map(),
   auth: null,
@@ -49,6 +52,7 @@ const routeMeta = {
   discover: ["EXPLORE", "发现"],
   search: ["FIND YOUR NEXT STORY", "搜索"],
   subscriptions: ["YOUR LIBRARY", "我的订阅"],
+  history: ["PICK UP WHERE YOU LEFT OFF", "最近听过"],
   settings: ["PREFERENCES", "设置"]
 };
 
@@ -394,6 +398,7 @@ function renderRoute() {
   if (state.episodeView) return renderEpisodePage(root);
   if (state.podcastView) return renderPodcastPage(root);
   if (state.route === "search") return renderSearchPage(root);
+  if (state.route === "history") return renderHistoryPage(root);
   if (state.route === "subscriptions") return renderSubscriptionsPage(root);
   if (state.route === "settings") return renderSettingsPage(root);
   return renderDiscoverPage(root);
@@ -779,6 +784,49 @@ const SUBSCRIPTION_PAGE_SIZE = 50;
 // 单次加载的硬性上限，防止接口异常时无限翻页
 const SUBSCRIPTION_MAX_PAGES = 40;
 
+const HISTORY_PAGE_SIZE = 24;
+
+function historyProgressLabel(record) {
+  const seconds = Number(record?.progress ?? record?.playedSeconds ?? 0);
+  if (!Number.isFinite(seconds) || seconds <= 0) return "";
+  return `上次听到 ${formatTime(seconds)}`;
+}
+
+async function loadHistory() {
+  const holder = $("#history-list");
+  if (!holder) return;
+  try {
+    const body = {};
+    const response = await api("/played_history", body);
+    const items = extractContent(response).filter((item) => episodeIdOf(item));
+    state.history = items;
+    // 把各集进度合并进来，用于显示「上次听到 X」
+    const progress = await fetchPlaybackProgress(items.map((item) => episodeIdOf(item)));
+    holder.innerHTML = items.length
+      ? items.map((item, index) => {
+        const card = podcastCard(item, index);
+        const seconds = progress.get(episodeIdOf(item))?.seconds;
+        const label = Number.isFinite(seconds) && seconds > 0
+          ? `<span class="history-progress">上次听到 ${esc(formatTime(seconds))}</span>`
+          : "";
+        return card.replace("</article>", label + "</article>");
+      }).join("")
+      : `<div class="empty">还没有收听记录。去发现页找一集听听吧。</div>`;
+    bindCardActions(holder, items);
+  } catch (error) {
+    holder.innerHTML = `<div class="empty">${esc(error.message)}<br /><button class="mini-button" data-action="login">去登录</button></div>`;
+    holder.querySelector("[data-action=login]")?.addEventListener("click", openLogin);
+  }
+}
+
+function renderHistoryPage(root) {
+  root.innerHTML = `<section>
+    <div class="section-heading"><h2>最近听过</h2><span>RECENTLY PLAYED</span></div>
+    <div id="history-list" class="feed-grid"><div class="loading">正在读取你的收听记录……</div></div>
+  </section>`;
+  loadHistory();
+}
+
 async function fetchAllSubscriptions() {
   const collected = [];
   const seen = new Set();
@@ -876,6 +924,81 @@ function closeEpisode() {
 
 function timestampDeepLink(item, seconds) {
   return XYZEpisodeContent.deepLink(episodeIdOf(item), seconds);
+}
+
+// 进度上报节流：播放器 timeupdate 触发太频繁，最多每 12 秒上报一次
+const PROGRESS_REPORT_INTERVAL_MS = 12_000;
+// 播放不足 5 秒不写入，避免误点产生一堆垃圾记录
+const MIN_PLAY_PROGRESS_SECONDS = 5;
+
+function progressListOf(response) {
+  const data = response?.data ?? response;
+  if (Array.isArray(data)) return data;
+  return data?.list ?? data?.items ?? data?.data ?? [];
+}
+
+async function fetchPlaybackProgress(eids) {
+  const ids = (Array.isArray(eids) ? eids : [eids]).filter(Boolean);
+  if (!ids.length) return new Map();
+  if (!state.auth?.accessToken) return new Map();
+  try {
+    const response = await api("/playback_progress", { eids: ids });
+    const map = new Map();
+    for (const record of progressListOf(response)) {
+      const eid = record?.eid || record?.id;
+      const seconds = Number(record?.progress);
+      if (eid && Number.isFinite(seconds) && seconds > 0) {
+        map.set(eid, { seconds, playedAt: record.playedAt || "", pid: record.pid || "" });
+      }
+    }
+    return map;
+  } catch {
+    // 进度读取失败不应阻断播放
+    return new Map();
+  }
+}
+
+function flushProgressReport() {
+  const pending = state.pendingProgress;
+  state.pendingProgress = null;
+  if (!pending) return;
+  if (!state.auth?.accessToken) return;
+  if (pending.seconds < MIN_PLAY_PROGRESS_SECONDS) return;
+  api("/playback_progress_update", {
+    eid: pending.eid,
+    pid: pending.pid,
+    progress: pending.seconds,
+    playedAt: new Date().toISOString()
+  }).catch(() => {
+    // 上报失败不影响继续播放
+  });
+}
+
+function scheduleProgressReport(item, seconds) {
+  if (!state.auth?.accessToken) return;
+  const eid = episodeIdOf(item);
+  const pid = podcastIdOf(item);
+  if (!eid || !pid) return;
+  state.pendingProgress = { eid, pid, seconds };
+  if (state.progressTimer) return;
+  state.progressTimer = setTimeout(() => {
+    state.progressTimer = null;
+    flushProgressReport();
+  }, PROGRESS_REPORT_INTERVAL_MS);
+}
+
+async function resumePlaybackPosition(episode, player) {
+  const eid = episodeIdOf(episode);
+  if (!eid || !state.auth?.accessToken) return null;
+  const progress = await fetchPlaybackProgress(eid);
+  const record = progress.get(eid);
+  if (!record) return null;
+  const duration = Number(player.duration);
+  const target = Number(record.seconds);
+  // 若上次已经播完（距结尾不足 60 秒）则从头播，不要停在片尾
+  if (Number.isFinite(duration) && duration > 0 && target >= duration - 60) return null;
+  if (!target || target < MIN_PLAY_PROGRESS_SECONDS) return null;
+  return target;
 }
 
 function seekToTimestamp(seconds, { scroll = false } = {}) {
@@ -1896,6 +2019,23 @@ async function openEpisode(item) {
     updatePlayerLinkButtons(episode);
     const player = $("#audio");
     player.src = audio;
+    // 记录当前会话的续播位置，等 loadedmetadata 后恢复
+    state.pendingResume = null;
+    resumePlaybackPosition(episode, player).then((seconds) => {
+      if (seconds == null) return;
+      // 只有当前仍是这一集才恢复，避免用户切走后又被拉回
+      if (episodeIdOf(state.current) !== episodeIdOf(episode)) return;
+      state.pendingResume = seconds;
+      const status = $("#transcription-status");
+      if (status) {
+        status.hidden = false;
+        status.textContent = `将从 ${formatTime(seconds)} 继续播放`;
+      }
+      if (player.readyState >= 1) {
+        player.currentTime = seconds;
+        state.pendingResume = null;
+      }
+    }).catch(() => {});
     $("#player-title").textContent = titleOf(episode);
     $("#player-subtitle").textContent = episode?.podcast?.title || episode?.podcast?.name || "小宇宙单集";
     const image = imageOf(episode);
@@ -2198,6 +2338,12 @@ function initPlayer() {
   audio.addEventListener("loadedmetadata", () => {
     $("#duration").textContent = formatTime(audio.duration);
     renderPlayerAnchors(state.current);
+    if (state.pendingResume != null && state.current) {
+      const target = state.pendingResume;
+      state.pendingResume = null;
+      if (audio.duration > 0) audio.currentTime = Math.min(target, audio.duration - 1);
+      notify(`已从 ${formatTime(target)} 继续播放`);
+    }
   });
   audio.addEventListener("timeupdate", () => {
     $("#current-time").textContent = formatTime(audio.currentTime);
@@ -2205,7 +2351,21 @@ function initPlayer() {
       ? (audio.currentTime / audio.duration) * 100
       : 0;
     updateActiveProgressAnchor(audio.currentTime);
+    // 只在播放中上报进度，暂停时不产生无意义的请求
+    if (!audio.paused && state.current) {
+      scheduleProgressReport(state.current, Math.floor(audio.currentTime));
+    }
   });
+  const flushNow = () => {
+    if (state.progressTimer) {
+      clearTimeout(state.progressTimer);
+      state.progressTimer = null;
+    }
+    flushProgressReport();
+  };
+  audio.addEventListener("pause", flushNow);
+  audio.addEventListener("ended", flushNow);
+  window.addEventListener("beforeunload", flushNow);
   $("#progress").addEventListener("input", (event) => { if (audio.duration) audio.currentTime = (event.target.value / 100) * audio.duration; });
   initVolumeControl(audio);
 }

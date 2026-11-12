@@ -419,3 +419,13 @@ button:disabled { cursor: not-allowed; }
   padding: 16px 0 24px;
   text-align: center;
 }
+
+
+/* 收听历史卡片：在卡片下方显示上次播放位置 */
+.history-progress {
+  color: var(--ink-soft);
+  display: inline-block;
+  font: 10px "DM Mono", monospace;
+  margin-top: 6px;
+  width: 100%;
+}

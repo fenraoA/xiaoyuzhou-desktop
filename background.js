@@ -185,7 +185,12 @@ const API_ENDPOINTS = {
   "/episode_detail": "/v1/episode/get",
   "/episode_list": "/v1/episode/list",
   "/subscription": "/v1/subscription/list",
-  "/subscription_update": "/v1/subscription/update"
+  "/subscription_update": "/v1/subscription/update",
+  // 播放进度：查询与上报（接口名与第三方客户端 ultrazg/xyz 一致）
+  "/playback_progress": "/v1/playback-progress/list",
+  "/playback_progress_update": "/v1/playback-progress/update",
+  // 收听历史
+  "/played_history": "/v1/episode-played/list-history"
 };
 
 const APP_HEADERS = {

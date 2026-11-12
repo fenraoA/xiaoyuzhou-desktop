@@ -168,3 +168,59 @@ test("discover is a paginated feed with refresh and infinite scroll", () => {
   const html = readFileSync(path.join(projectRoot, "app.html"), "utf8");
   assert.ok(!html.includes("discover-sentinel"), "哨兵节点应由 JS 注入，不应写死在静态 HTML");
 });
+
+test("playback progress reads and reports through the shared api helper", () => {
+  const bg = readFileSync(path.join(projectRoot, "background.js"), "utf8");
+  // 三个新接口必须注册到路由表，否则 fetchApi 会因未知 endpoint 抛错
+  for (const [name, upstream] of [
+    ["/playback_progress", "/v1/playback-progress/list"],
+    ["/playback_progress_update", "/v1/playback-progress/update"],
+    ["/played_history", "/v1/episode-played/list-history"]
+  ]) {
+    assert.ok(bg.includes(`"${name}": "${upstream}"`), `background 未注册 ${name}`);
+  }
+
+  // 读取与上报都走 api()，鉴权由 fetchApi 统一处理
+  const readStart = appSource.indexOf("async function fetchPlaybackProgress");
+  assert.ok(appSource.slice(readStart, readStart + 900).includes('api("/playback_progress"'));
+  const reportStart = appSource.indexOf("function flushProgressReport");
+  assert.ok(appSource.slice(reportStart, reportStart + 900).includes('api("/playback_progress_update"'));
+});
+
+test("resume skips finished episodes and guards against short play", () => {
+  const start = appSource.indexOf("async function resumePlaybackPosition");
+  const end = appSource.indexOf("function seekToTimestamp", start);
+  const body = appSource.slice(start, end);
+  // 播完的集不应从头恢复
+  assert.ok(body.includes("duration - 60"), "播完的集不该续播到片尾");
+  // 没有登录就不该请求进度接口
+  assert.ok(body.includes("state.auth?.accessToken"), "未登录时应跳过进度读取");
+  // 读取的是单集 id
+  assert.ok(body.includes("progress.get(eid)"), "应按 eid 取进度");
+});
+
+test("progress reporting is throttled and flushed on pause/ended", () => {
+  const start = appSource.indexOf("function scheduleProgressReport");
+  const end = appSource.indexOf("async function resumePlaybackPosition", start);
+  const body = appSource.slice(start, end);
+  assert.ok(body.includes("setTimeout"), "需要节流，避免 timeupdate 高频上报");
+  assert.ok(body.includes("state.progressTimer"), "重复调用时应复用同一个定时器");
+  // 播放器事件里必须有补报
+  const initStart = appSource.indexOf("function initPlayer");
+  const initEnd = appSource.indexOf("function volumeIconFor", initStart);
+  const init = appSource.slice(initStart, initEnd);
+  for (const ev of ["pause", "ended"]) {
+    assert.ok(init.includes(`addEventListener("${ev}", flushNow)`),
+      `缺少 ${ev} 时的进度补报`);
+  }
+});
+
+test("history page is routed and renders progress", () => {
+  assert.ok(appSource.includes("function renderHistoryPage"), "缺少 renderHistoryPage");
+  assert.ok(appSource.includes('state.route === "history"'), "路由未接入 history");
+  assert.ok(appSource.includes('"/played_history"'), "历史页未请求收听历史");
+  assert.ok(appSource.includes("fetchPlaybackProgress"), "历史页应合并各集进度");
+
+  const html = readFileSync(path.join(projectRoot, "app.html"), "utf8");
+  assert.ok(html.includes('data-route="history"'), "导航缺少「最近听过」入口");
+});
