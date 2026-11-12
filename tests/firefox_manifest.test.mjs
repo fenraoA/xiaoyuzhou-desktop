@@ -37,6 +37,20 @@ test("every manifest permission and host pattern is valid for Firefox", () => {
   }
 });
 
+test("version is bumped past the last released build", () => {
+  // AMO 拒绝重复版本号。0.5.11 已作为首个签名版本上传，之后任何改动都必须升版本。
+  const LAST_RELEASED = "0.5.11";
+  const version = manifest.version;
+  const toParts = (v) => v.split(".").map((n) => Number.parseInt(n, 10));
+  const [a, b, c] = toParts(version);
+  const [x, y, z] = toParts(LAST_RELEASED);
+  const newer = a > x || (a === x && (b > y || (b === y && c > z)));
+  assert.ok(
+    newer,
+    `manifest 版本 ${version} 不大于已发布的 ${LAST_RELEASED}，AMO 会拒绝上传`
+  );
+});
+
 test("all referenced files exist and content scripts are omitted", () => {
   for (const file of [...manifest.background.scripts, "app.html", "app.js", "app.css"]) {
     assert.ok(existsSync(path.join(projectRoot, file)), `缺少文件：${file}`);
