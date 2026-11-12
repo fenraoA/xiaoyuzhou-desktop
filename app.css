@@ -287,3 +287,42 @@ button:disabled { cursor: not-allowed; }
   .feed-grid { grid-template-columns: 1fr; }
 }
 
+
+.permission-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 0 0 12px;
+  padding: 10px 14px;
+  border: 1px solid rgba(233, 131, 118, 0.45);
+  border-radius: 12px;
+  background: rgba(233, 131, 118, 0.12);
+  font-size: 13px;
+  line-height: 1.5;
+}
+.permission-banner[hidden] { display: none; }
+.permission-banner .primary-button { flex: none; }
+
+.login-qrcode {
+  display: grid;
+  gap: 14px;
+  justify-items: center;
+  margin: 18px 0 6px;
+  padding: 18px;
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+}
+.login-qrcode canvas {
+  display: block;
+  image-rendering: pixelated;
+  max-width: 100%;
+}
+.login-qrcode .code-status {
+  margin: 0;
+  text-align: center;
+}
+.code-status.is-error { color: #b4453a; }
+.code-status.is-pending { color: var(--ink-soft); }
+.code-status.is-success { color: #377551; }
