@@ -334,3 +334,16 @@ test("feed cards binding only targets newly added cards", () => {
   const body = appSource.slice(i, j);
   assert.ok(body.includes("bindCardActions(holder, state.feed, newCards)"), "分页追加卡片时不应对全量旧卡片重复绑定事件");
 });
+
+test("bindCardActions fallback uses double dollar and guarantees array", () => {
+  const i = appSource.indexOf("function bindCardActions");
+  const j = appSource.indexOf("\n}", i);
+  const body = appSource.slice(i, j + 2);
+  // 必须使用双美元符号
+  assert.ok(body.includes('$$(".podcast-card", holder)'), "未传入 specificCards 时必须使用双美元符号返回数组");
+  // 必须对 targets 做数组安全保护
+  assert.ok(body.includes("Array.isArray(targets)"), "必须对 targets 做数组安全保护");
+  // 严禁单美元符号调用
+  const singleMatches = [...body.matchAll(/(?<!\$)\$\("\.podcast-card"/g)];
+  assert.equal(singleMatches.length, 0, "bindCardActions 中不能包含单美元符号");
+});
