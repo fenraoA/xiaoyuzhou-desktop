@@ -305,3 +305,9 @@ test("podcast detail fetches and displays popular episodes", () => {
   assert.ok(appSource.includes('api("/episode_popular"'), "未调用最受欢迎单集接口");
   assert.ok(appSource.includes("popular-episodes-section"), "缺少热门单集展示容器");
 });
+
+test("no single dollar querySelector has .forEach called on it", () => {
+  // $(...) 选出来的是单一 Element，调用 forEach 会在运行时抛 $(...).forEach is not a function
+  const matches = [...appSource.matchAll(/(?<!\$)\$\(([^)]+)\)\.forEach/g)];
+  assert.equal(matches.length, 0, "发现非法 $(...).forEach 调用：" + matches.map(m => m[0]).join(", "));
+});
