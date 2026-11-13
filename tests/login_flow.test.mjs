@@ -258,3 +258,50 @@ test("favorite action is available in cards and player menu", () => {
   const html = readFileSync(path.join(projectRoot, "app.html"), "utf8");
   assert.ok(html.includes('id="favorite-button"'), "播放器菜单缺少收藏按钮");
 });
+
+test("local playlist persists entries and supports drag sorting", () => {
+  assert.ok(appSource.includes("const PLAYLIST_KEY"), "缺少播放列表存储键");
+  assert.ok(appSource.includes("browser.storage.local.get(PLAYLIST_KEY)"), "播放列表未存本地");
+  assert.ok(appSource.includes("function movePlaylistItem"), "缺少拖拽排序");
+  assert.ok(appSource.includes("function renderPlaylistPage"), "缺少播放列表页");
+
+  const html = readFileSync(path.join(projectRoot, "app.html"), "utf8");
+  assert.ok(html.includes('data-route="playlist"'), "导航缺少播放列表入口");
+  assert.ok(html.includes('id="add-playlist-button"'), "播放器菜单缺少加入播放列表");
+
+  // 卡片菜单必须能添加
+  assert.ok(appSource.includes('data-card-action="add-playlist"'), "卡片菜单缺少加入播放列表");
+});
+
+test("playlist auto-advances when an episode ends", () => {
+  assert.ok(appSource.includes("playNextInPlaylist"), "缺少播完切下一集");
+  const i = appSource.indexOf("function initPlayer");
+  const j = appSource.indexOf("function volumeIconFor", i);
+  const body = appSource.slice(i, j);
+  assert.ok(body.includes("playNextInPlaylist"), "播放器未接入自动连播");
+});
+
+test("playlist dedupes by episode id", () => {
+  const i = appSource.indexOf("async function addToPlaylist");
+  const j = appSource.indexOf("async function removeFromPlaylist", i);
+  const body = appSource.slice(i, j);
+  assert.ok(body.includes("已在播放列表中"), "重复添加时应提示");
+  assert.ok(body.includes("state.route === \"playlist\""), "添加后应刷新播放列表页");
+});
+
+test("discover supports top lists tabs and switching", () => {
+  assert.ok(appSource.includes("const TOP_CATEGORIES"), "缺少 TOP_CATEGORIES 定义");
+  assert.ok(appSource.includes("async function loadTopList"), "缺少 loadTopList 函数");
+  assert.ok(appSource.includes("function switchDiscoverTab"), "缺少 switchDiscoverTab 函数");
+  assert.ok(appSource.includes("HOT_EPISODES_IN_24_HOURS"), "最热榜枚举值未定义");
+  assert.ok(appSource.includes("SKYROCKET_EPISODES"), "锋芒榜枚举值未定义");
+  assert.ok(appSource.includes("NEW_STAR_EPISODES"), "新星榜枚举值未定义");
+});
+
+test("podcast detail fetches and displays popular episodes", () => {
+  const bg = readFileSync(path.join(projectRoot, "background.js"), "utf8");
+  assert.ok(bg.includes('"/episode_popular": "/v1/episode/list-by-filter"'), "后台未注册 /episode_popular 接口");
+  assert.ok(appSource.includes("loadPodcastPopularEpisodes"), "缺少 loadPodcastPopularEpisodes 函数");
+  assert.ok(appSource.includes('api("/episode_popular"'), "未调用最受欢迎单集接口");
+  assert.ok(appSource.includes("popular-episodes-section"), "缺少热门单集展示容器");
+});

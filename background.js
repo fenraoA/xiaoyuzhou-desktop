@@ -194,7 +194,9 @@ const API_ENDPOINTS = {
   // 播放记录（进入「最近听过」）
   "/played_create": "/v1/episode-played/create",
   // 收藏单集
-  "/favorite_update": "/v1/favorite/update"
+  "/favorite_update": "/v1/favorite/update",
+  // 节目内最受欢迎单集
+  "/episode_popular": "/v1/episode/list-by-filter"
 };
 
 const APP_HEADERS = {
