@@ -452,9 +452,12 @@ const DISCOVER_PAGE_SIZE = 18;
 const DISCOVER_MAX_PAGES = 30;
 
 function appendFeedCards(holder, items, startIndex) {
-  const html = items.map((item, offset) => podcastCard(item, startIndex + offset)).join("");
-  holder.insertAdjacentHTML("beforeend", html);
-  bindCardActions(holder, state.feed);
+  const container = document.createElement("div");
+  container.innerHTML = items.map((item, offset) => podcastCard(item, startIndex + offset)).join("");
+  const newCards = [...container.children];
+  newCards.forEach((card) => holder.appendChild(card));
+  // 仅对新追加的卡片挂载监听，旧卡片不重复监听
+  bindCardActions(holder, state.feed, newCards);
 }
 
 function updateDiscoverCount() {
@@ -724,8 +727,9 @@ function favoriteActionLabel(item) {
   return state.favorites?.has(eid) ? "取消收藏" : "收藏单集";
 }
 
-function bindCardActions(holder, items) {
-  $$(".podcast-card", holder).forEach((card) => {
+function bindCardActions(holder, items, specificCards = null) {
+  const targets = specificCards ? specificCards.filter((el) => el.classList.contains("podcast-card")) : $(".podcast-card", holder);
+  targets.forEach((card) => {
     card.addEventListener("click", (event) => {
       const item = items[Number(card.dataset.index)];
       const control = event.target.closest("button, summary");
@@ -975,7 +979,7 @@ async function renderPlaylistPage(root) {
   const counter = $("#playlist-count");
   const currentEid = episodeIdOf(state.current);
   if (counter) {
-    const totalSecs = list.reduce((sum, item) => sum + (Number(item.duration) || 0), 0);
+    const totalSecs = list.reduce((sum, item) => sum + (Number(item?.duration) || 0), 0);
     const timeStr = totalSecs > 0 ? ` · 约 ${Math.round(totalSecs / 60)} 分钟` : "";
     counter.textContent = `${list.length} 集${timeStr}`;
   }
@@ -1188,8 +1192,9 @@ function updatePlaylistBadges(count) {
 
 async function loadPlaylist() {
   try {
-    const { [PLAYLIST_KEY]: list = [] } = await browser.storage.local.get(PLAYLIST_KEY);
-    const valid = Array.isArray(list) ? list : [];
+    const { [PLAYLIST_KEY]: raw = [] } = await browser.storage.local.get(PLAYLIST_KEY);
+    // 过滤掉任何非对象或缺失 eid 的脏数据
+    const valid = (Array.isArray(raw) ? raw : []).filter((item) => item && typeof item === "object" && episodeIdOf(item));
     state.playlist = valid;
     updatePlaylistBadges(valid.length);
     return valid;
@@ -1303,12 +1308,13 @@ async function playNextInPlaylist() {
   const list = await loadPlaylist();
   if (!list.length) return;
   let next = 0;
-  if (state.playlistIndex != null) {
-    next = state.playlistIndex + 1;
-  } else if (state.current) {
-    const curEid = episodeIdOf(state.current);
+  // 优先根据当前正在播放的单集 eid 定位，即使发生拖动排序或删除，也能精准找到紧邻的下一首
+  const curEid = episodeIdOf(state.current);
+  if (curEid) {
     const idx = list.findIndex(e => episodeIdOf(e) === curEid);
     next = idx >= 0 ? idx + 1 : 0;
+  } else if (state.playlistIndex != null) {
+    next = state.playlistIndex + 1;
   }
   if (next >= list.length) {
     state.playlistIndex = null;
@@ -1745,7 +1751,7 @@ function renderSettingsPage(root) {
               <button id="activate-summary-prompt" class="mini-button" type="button">设为当前</button>
               <button id="delete-summary-prompt" class="mini-button is-danger" type="button">删除版本</button>
             </div>
-            <p class="field-hint">内置版本只读；自定义版本保存在 Chrome 本地存储。支持占位符 <code>{{title}}</code>。</p>
+            <p class="field-hint">内置版本只读；自定义版本保存在本地存储。支持占位符 <code>{{title}}</code>。</p>
           </div>
         </section>
         <section class="settings-section settings-panel" data-settings-panel="advanced" ${panelHidden("advanced")}>
@@ -1902,7 +1908,7 @@ function renderSettingsPage(root) {
       ? "Windows 安装步骤"
       : "macOS 安装步骤";
     $("#native-install-description").textContent = isWindows
-      ? "先安装 Python 3 并勾选 Add Python to PATH；随后在项目目录用 PowerShell 执行下方命令，完成后在 chrome://extensions 重新加载扩展。"
+      ? "先安装 Python 3 并勾选 Add Python to PATH；随后在项目目录用 PowerShell 执行下方命令，完成后在扩展管理页面重新载入扩展。"
       : "在项目目录用终端执行下方命令；完成后重新加载扩展。";
     $("#native-extension-id").textContent = status.extensionId || "未知";
     $("#native-manifest-path").textContent = status.manifestPath || "未知";

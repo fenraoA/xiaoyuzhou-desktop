@@ -311,3 +311,26 @@ test("no single dollar querySelector has .forEach called on it", () => {
   const matches = [...appSource.matchAll(/(?<!\$)\$\(([^)]+)\)\.forEach/g)];
   assert.equal(matches.length, 0, "发现非法 $(...).forEach 调用：" + matches.map(m => m[0]).join(", "));
 });
+
+test("playlist loading sanitizes null or corrupted items", () => {
+  assert.ok(appSource.includes("episodeIdOf(item)"), "loadPlaylist 应对每个元素校验有效性");
+  assert.ok(appSource.includes("item?.duration"), "reduce 计算时长时应做空安全保护");
+});
+
+test("playNextInPlaylist prefers current episode eid over raw index", () => {
+  const i = appSource.indexOf("async function playNextInPlaylist");
+  const j = appSource.indexOf("function progressListOf", i);
+  const body = appSource.slice(i, j);
+  assert.ok(body.includes("const curEid = episodeIdOf(state.current)"), "应首先提取当前单集 eid");
+  // 必须把根据 curEid 查找放在 state.playlistIndex 前面
+  const eidIdx = body.indexOf("const curEid = episodeIdOf");
+  const fallbackIdx = body.indexOf("state.playlistIndex != null");
+  assert.ok(eidIdx < fallbackIdx, "以 eid 查找下一集应优先于原始数字下标");
+});
+
+test("feed cards binding only targets newly added cards", () => {
+  const i = appSource.indexOf("function appendFeedCards");
+  const j = appSource.indexOf("function updateDiscoverCount", i);
+  const body = appSource.slice(i, j);
+  assert.ok(body.includes("bindCardActions(holder, state.feed, newCards)"), "分页追加卡片时不应对全量旧卡片重复绑定事件");
+});
