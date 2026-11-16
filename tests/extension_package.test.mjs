@@ -16,6 +16,7 @@ const PACKAGE_WHITELIST = new Set([
   "qrcode.js",
   "episode_content.js",
   "comment_utils.mjs",
+  "settings_policy.js",
   "LICENSE"
 ]);
 

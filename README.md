@@ -38,6 +38,9 @@ Demo 使用虚构数据，可体验发现、节目详情、播放器、文字稿
 
 - 发现、搜索和查看已订阅节目
 - 查看节目详情及单集列表
+- 点击单集卡片查看详情，保持当前音频与底部章节；明确点击播放或详情时间戳时才切换单集
+- 恢复暂停、从头重播、按已保存进度续播；距结尾不足 60 秒时从头播放
+- 本地播放队列支持下一首、删除、清空及按单集 ID 拖拽排序，多窗口动作在后台串行保存
 - 播放单集，复制节目或单集链接
 - 下载音频到浏览器默认目录或 macOS 绝对路径
 - 使用本地 Qwen3-ASR、Qwen API 或豆包 API 转写音频，并保留节目时间戳深链
@@ -87,6 +90,8 @@ cd xiaoyuzhou-desktop
 4. 扩展 ID 由 `browser_specific_settings.gecko.id` 固定为 `xiaoyuzhou-desktop@qwe38qwe.github.io`，无需手工记录
 
 > 临时载入的扩展会在 Firefox 重启后移除；需要长期使用时，请用 `web-ext sign` 或 `about:config` 的 `xpinstall.signatures.required=false` 自行打包安装。
+
+本轮待签名版本为 **0.8.5**，适用于 Firefox 140+ 及兼容的 Zen。`main` 保留 Firefox 清单与 Native Host 安装方式；`chrome-port` 同步业务修复，使用 Chrome Service Worker 和 Chrome 原生消息清单。Firefox ZIP 需经过 AMO 签名后再安装；本轮签名文件到位前不发布发行版。
 
 首次安装后，Firefox 可能将小宇宙域名列为可选站点权限。若顶栏出现“Firefox 未授予访问小宇宙域名的权限”提示条，点击“授权访问”即可；也可在 `about:addons` → 本扩展 → 权限 中手动开启。
 
@@ -276,12 +281,16 @@ Firefox 的 `windows` 不是可声明的权限项（相应 API 无需授权）�
 站点权限：若被拒绝，扩展会显示提示条，点击“授权访问”调用
 `browser.permissions.request()` 重新申请。
 
+自定义代理仅支持标准端口的 HTTPS 地址。设置页保存代理时直接申请该站点的单独权限，拒绝授权不会启用代理；后台每次请求（含刷新令牌）都会再检查权限，并拒绝重定向，防止令牌随重定向发往其他站点。`optional_host_permissions` 的 `https://*/*` 仅用于声明用户可选择的代理范围，不会自动授予所有站点访问权；`connect-src https:` 允许浏览器连接已选择的 HTTPS 代理，脚本仍仅从扩展本地加载。代理会收到小宇宙请求和登录令牌，请仅选择你信任的服务。
+
+AI 总结的同意记录绑定具体 Provider、接口地址、模型、文字稿/ASR 来源和是否附带评论。更换任一项后需要重新确认；旧版只有布尔值的同意记录不再沿用。长任务在调用 ASR/总结前还会检查本次同意范围，配置改变后需重新发起。
+
 ## 开发检查
 
 ```bash
 node --check app.js
 node --check background.js
-node --test tests/
+node --test tests/*.test.js tests/*.test.mjs
 /usr/bin/python3 -m py_compile native_host.py
 /usr/bin/python3 -m json.tool manifest.json >/dev/null
 sh -n install_native_host.sh
@@ -291,6 +300,8 @@ sh -n install_local_asr.sh
 `tests/firefox_manifest.test.mjs` 会校验清单目标为 Firefox、后台脚本为事件页、
 权限项均在 Firefox 支持列表内、源码不再出现 `chrome.*` 或 `runtime.lastError` 回调，
 以及两份装脚本写入的是 `allowed_extensions` 和 Mozilla 注册表/目录。
+
+`tests/playback_behavior.test.mjs` 与 `tests/background_behavior.test.mjs` 在 Node VM 中执行真实应用代码和事件回调，覆盖播放隔离、乱序请求、元数据/进度先后时序、队列并发与拖拽、二维码生命周期、代理授权和 AI 同意范围。音频、网络和扩展 API 使用可控替身，这些测试不能替代 Firefox/Zen 的真实扩展加载、音频服务和 AMO 签名验证。
 
 Windows 安装脚本可在 Windows PowerShell 中执行验证。
 

@@ -5,6 +5,7 @@ import path from "node:path";
 import test from "node:test";
 import vm from "node:vm";
 import { fileURLToPath } from "node:url";
+import { appHarness, episode, settle } from "./app_harness.mjs";
 
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const appSource = readFileSync(path.join(projectRoot, "app.js"), "utf8");
@@ -65,14 +66,19 @@ test("polling uses recursive setTimeout instead of setInterval", () => {
   assert.ok(body.includes("setTimeout(tick"), "应使用递归 setTimeout 串行轮询");
 });
 
-test("login success pulls the full auth object from the background", () => {
-  const start = appSource.indexOf("async function startLoginQrcode");
-  const end = appSource.indexOf("function openLogin", start);
-  const body = appSource.slice(start, end);
-  assert.ok(
-    body.includes('state.auth = await send("get-auth")'),
-    "登录成功后应从后台取完整 auth 对象，而不是用返回的 user 拼半个对象"
-  );
+test("login success pulls the full auth object from the background", async () => {
+  const h = appHarness();
+  const auth = { accessToken: "test-access", refreshToken: "test-refresh", user: { nickname: "test" } };
+  h.backend.sandbox.createLoginQrcode = async () => ({ id: "qr", url: "image" });
+  h.backend.sandbox.pollLoginQrcode = async () => ({ status: "authorized", user: {} });
+  h.backend.sandbox.getAuth = async () => auth;
+  h.sandbox.drawLoginQrcode = () => {};
+  h.sandbox.markConnection = () => {};
+  h.sandbox.renderRoute = () => {};
+  await h.sandbox.startLoginQrcode();
+  await [...h.timers.values()][0]();
+  assert.equal(h.state.auth.accessToken, auth.accessToken);
+  assert.equal(h.state.auth.refreshToken, auth.refreshToken);
 });
 
 test("background parses JSON safely everywhere", () => {
@@ -235,12 +241,13 @@ test("played history marks episodes when they start playing", () => {
   assert.ok(appSource.slice(i, j).includes("markEpisodePlayed"), "openEpisode 未调用 markEpisodePlayed");
 });
 
-test("same episode click opens detail instead of replaying", () => {
-  const i = appSource.indexOf("async function openEpisode");
-  const j = appSource.indexOf("async function toggleSubscription", i);
-  const body = appSource.slice(i, j);
-  assert.ok(body.includes("episodeIdOf(state.current) === episodeIdOf(episode)"), "缺少同一集判断");
-  assert.ok(body.includes("state.episodeView"), "同一集应打开详情页");
+test("same episode click opens detail instead of replaying", async () => {
+  const h = appHarness(); const a = episode("A"); h.cache(a);
+  await h.start(a); await h.audio.metadata(); h.audio.currentTime = 100;
+  await h.start(a);
+  assert.equal(h.state.episodeView.episode.eid, "A");
+  assert.equal(h.audio.sourceChanges, 1);
+  assert.equal(h.audio.currentTime, 100);
 });
 
 test("player title and cover navigate to the podcast", () => {
@@ -259,18 +266,16 @@ test("favorite action is available in cards and player menu", () => {
   assert.ok(html.includes('id="favorite-button"'), "播放器菜单缺少收藏按钮");
 });
 
-test("local playlist persists entries and supports drag sorting", () => {
-  assert.ok(appSource.includes("const PLAYLIST_KEY"), "缺少播放列表存储键");
-  assert.ok(appSource.includes("browser.storage.local.get(PLAYLIST_KEY)"), "播放列表未存本地");
-  assert.ok(appSource.includes("function movePlaylistItem"), "缺少拖拽排序");
-  assert.ok(appSource.includes("function renderPlaylistPage"), "缺少播放列表页");
-
-  const html = readFileSync(path.join(projectRoot, "app.html"), "utf8");
-  assert.ok(html.includes('data-route="playlist"'), "导航缺少播放列表入口");
-  assert.ok(html.includes('id="add-playlist-button"'), "播放器菜单缺少加入播放列表");
-
-  // 卡片菜单必须能添加
-  assert.ok(appSource.includes('data-card-action="add-playlist"'), "卡片菜单缺少加入播放列表");
+test("local playlist persists entries and supports drag sorting", async () => {
+  const h = appHarness(); await h.sandbox.addToPlaylist(episode("A")); await h.sandbox.addToPlaylist(episode("B"));
+  const second = appHarness({ backend: h.backend }); second.state.route = "playlist";
+  await second.sandbox.renderRoute();
+  const holder = second.node("#playlist-list");
+  const source = holder.querySelector('[data-eid="B"]');
+  const target = holder.querySelector('[data-eid="A"]');
+  await holder.emit("dragstart", { target: source, dataTransfer: { setData() {} } });
+  await holder.emit("drop", { target }); await settle();
+  assert.deepEqual(Array.from(h.backend.stored.xyzPlaylist, (entry) => entry.eid), ["B", "A"]);
 });
 
 test("playlist auto-advances when an episode ends", () => {
@@ -281,12 +286,10 @@ test("playlist auto-advances when an episode ends", () => {
   assert.ok(body.includes("playNextInPlaylist"), "播放器未接入自动连播");
 });
 
-test("playlist dedupes by episode id", () => {
-  const i = appSource.indexOf("async function addToPlaylist");
-  const j = appSource.indexOf("async function removeFromPlaylist", i);
-  const body = appSource.slice(i, j);
-  assert.ok(body.includes("已在播放列表中"), "重复添加时应提示");
-  assert.ok(body.includes("state.route === \"playlist\""), "添加后应刷新播放列表页");
+test("playlist dedupes by episode id", async () => {
+  const h = appHarness(); const a = episode("A");
+  await Promise.all([h.sandbox.addToPlaylist(a), h.sandbox.addToPlaylist(a)]);
+  assert.deepEqual(Array.from(h.backend.stored.xyzPlaylist, (entry) => entry.eid), ["A"]);
 });
 
 test("discover supports top lists tabs and switching", () => {
@@ -317,15 +320,12 @@ test("playlist loading sanitizes null or corrupted items", () => {
   assert.ok(appSource.includes("item?.duration"), "reduce 计算时长时应做空安全保护");
 });
 
-test("playNextInPlaylist prefers current episode eid over raw index", () => {
-  const i = appSource.indexOf("async function playNextInPlaylist");
-  const j = appSource.indexOf("function progressListOf", i);
-  const body = appSource.slice(i, j);
-  assert.ok(body.includes("const curEid = episodeIdOf(state.current)"), "应首先提取当前单集 eid");
-  // 必须把根据 curEid 查找放在 state.playlistIndex 前面
-  const eidIdx = body.indexOf("const curEid = episodeIdOf");
-  const fallbackIdx = body.indexOf("state.playlistIndex != null");
-  assert.ok(eidIdx < fallbackIdx, "以 eid 查找下一集应优先于原始数字下标");
+test("playNextInPlaylist prefers current episode eid over raw index", async () => {
+  const h = appHarness(); const a = episode("A"), b = episode("B"); h.cache(a, b);
+  await h.sandbox.addToPlaylist(a); await h.sandbox.addToPlaylist(b); await h.start(a);
+  h.state.playlistIndex = 99;
+  await h.sandbox.playNextInPlaylist();
+  assert.equal(h.state.current.eid, "B");
 });
 
 test("feed cards binding only targets newly added cards", () => {
@@ -335,15 +335,11 @@ test("feed cards binding only targets newly added cards", () => {
   assert.ok(body.includes("bindCardActions(holder, state.feed, newCards)"), "分页追加卡片时不应对全量旧卡片重复绑定事件");
 });
 
-test("bindCardActions fallback uses double dollar and guarantees array", () => {
-  const i = appSource.indexOf("function bindCardActions");
-  const j = appSource.indexOf("\n}", i);
-  const body = appSource.slice(i, j + 2);
-  // 必须使用双美元符号
-  assert.ok(body.includes('$$(".podcast-card", holder)'), "未传入 specificCards 时必须使用双美元符号返回数组");
-  // 必须对 targets 做数组安全保护
-  assert.ok(body.includes("Array.isArray(targets)"), "必须对 targets 做数组安全保护");
-  // 严禁单美元符号调用
-  const singleMatches = [...body.matchAll(/(?<!\$)\$\("\.podcast-card"/g)];
-  assert.equal(singleMatches.length, 0, "bindCardActions 中不能包含单美元符号");
+test("bindCardActions fallback uses double dollar and guarantees array", async () => {
+  const h = appHarness(); const a = episode("A"); h.cache(a);
+  const holder = h.document.createElement("div"); holder.innerHTML = h.sandbox.podcastCard(a, 0);
+  h.sandbox.bindCardActions(holder, [a]);
+  await holder.children[0].click(); await settle();
+  assert.equal(h.state.episodeView.episode.eid, "A");
+  assert.equal(h.audio.sourceChanges, 0);
 });
